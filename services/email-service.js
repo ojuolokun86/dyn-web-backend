@@ -1,14 +1,127 @@
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 
-// Email transporter configuration
+// Email transporter configuration with fallback
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    service: process.env.EMAIL_SERVICE || 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD
+    },
+    // Add connection options for better reliability
+    pool: true,
+    maxConnections: 1,
+    maxMessages: 100,
+    rateDelta: 1000,
+    rateLimit: 5,
+    // Try different ports and secure settings
+    port: process.env.EMAIL_PORT || 587,
+    secure: process.env.EMAIL_SECURE === 'true', // true for 465, false for other ports
+    tls: {
+        rejectUnauthorized: false
     }
 });
+
+// Alternative transporter for Outlook/Hotmail
+const outlookTransporter = nodemailer.createTransport({
+    host: 'smtp-mail.outlook.com',
+    port: 587,
+    secure: false,
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+    },
+    tls: {
+        rejectUnauthorized: false
+    }
+});
+
+// Test email configuration with fallback
+async function testEmailConfiguration() {
+    try {
+        
+        // Test primary transporter
+        try {
+            await transporter.verify();
+            return true;
+        } catch (primaryError) {
+            
+            // Try Outlook as fallback
+            try {
+                await outlookTransporter.verify();
+                return true;
+            } catch (outlookError) {
+                return false;
+            }
+        }
+    } catch (error) {
+        return false;
+    }
+}
+
+// Send Hall of Fame notification email
+async function sendHallOfFameNotification(hallOfFameData) {
+    const { player_name, email, league, team_name, season, achievement_count, phone } = hallOfFameData;
+    
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: '🏆 Congratulations! You\'ve Been Inducted into the Hall of Fame - DYNAMIC EFOOTBALL COMMUNITY',
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 15px;">
+                <div style="background: white; padding: 30px; border-radius: 12px; text-align: center;">
+                    <h1 style="color: #667eea; margin-bottom: 20px; font-size: 32px;">🏆 Hall of Fame Induction!</h1>
+                    
+                    <div style="background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%); color: #333; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                        <h2 style="margin: 0 0 10px 0; font-size: 24px;">Congratulations, ${player_name}!</h2>
+                        <p style="margin: 0; font-size: 18px;">You have been officially inducted into the Hall of Fame</p>
+                    </div>
+
+                    <div style="text-align: left; background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <h3 style="color: #667eea; margin-top: 0;">📋 Achievement Details:</h3>
+                        <ul style="line-height: 1.8;">
+                            <li><strong>League:</strong> ${league}</li>
+                            <li><strong>Team:</strong> ${team_name}</li>
+                            <li><strong>Season:</strong> ${season}</li>
+                            <li><strong>Phone:</strong> ${phone || 'Not provided'}</li>
+                        </ul>
+                    </div>
+
+                    <div style="background: linear-gradient(135deg, #4caf50 0%, #45a049 100%); color: white; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                        <h3 style="margin: 0 0 10px 0; font-size: 20px;">🎯 Your Legacy:</h3>
+                        <p style="margin: 0; font-size: 18px;">This is your <strong>${achievement_count}${getOrdinalSuffix(achievement_count)}</strong> Hall of Fame induction!</p>
+                        <p style="margin: 10px 0 0 0;">Your exceptional skills and dedication have earned you a permanent place among the legends of DYNAMIC EFOOTBALL COMMUNITY.</p>
+                    </div>
+
+                    <div style="margin: 30px 0; padding: 20px; border: 2px solid #667eea; border-radius: 8px;">
+                        <p style="margin: 0; color: #667eea; font-weight: bold;">🌟 "Great players are remembered, but legends never die. Your name will forever be etched in the annals of eFootball history."</p>
+                    </div>
+
+                    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                        <p style="color: #666; margin: 0;">This honor was bestowed by the DYNAMIC EFOOTBALL COMMUNITY administration.</p>
+                        <p style="color: #666; margin: 10px 0 0 0;">Keep up the excellent work and continue to inspire others!</p>
+                    </div>
+                </div>
+            </div>
+        `
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        throw error;
+    }
+}
+
+// Helper function to get ordinal suffix (1st, 2nd, 3rd, 4th, etc.)
+function getOrdinalSuffix(num) {
+    const j = num % 10;
+    const k = num % 100;
+    if (j == 1 && k != 11) return "st";
+    if (j == 2 && k != 12) return "nd";
+    if (j == 3 && k != 13) return "rd";
+    return "th";
+}
 
 // Send registration submission email to superadmin
 async function sendRegistrationToSuperAdmin(registrationData) {
@@ -195,5 +308,7 @@ module.exports = {
     sendRegistrationToSuperAdmin,
     sendApprovalEmail,
     sendRejectionEmail,
-    sendContenderNotification
+    sendContenderNotification,
+    sendHallOfFameNotification,
+    testEmailConfiguration
 };

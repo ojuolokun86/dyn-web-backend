@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/db');
-const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail } = require('../services/email-service');
+const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail, sendHallOfFameNotification, testEmailConfiguration } = require('../services/email-service');
 const { isValidEmail, isValidPassword, isValidUsername, hashPassword, comparePassword } = require('../utils/validation');
 
 const router = express.Router();
@@ -899,37 +899,96 @@ router.get('/hall-of-fame-web', async (req, res) => {
     }
 });
 
-// Add new Hall of Fame Web entry
-router.post('/hall-of-fame-web', async (req, res) => {
+// Create Hall of Fame Web entry
+router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
     try {
-        const { player_name, league, team_name, team_logo, player_image, season } = req.body;
+        const { player_name, league, team_name, season, team_logo, player_image, email, phone } = req.body;
 
         if (!player_name || !league || !team_name || !season) {
+            return res.status(400).json({ success: false, error: 'Required fields missing' });
+        }
+
+        // Check if league and season combination already exists
+        const { data: existingEntry, error: checkError } = await supabase
+            .from('hall_of_fame_web')
+            .select('id, player_name, team_name')
+            .eq('league', league)
+            .eq('season', season)
+            .single();
+
+        if (!checkError && existingEntry) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'Player name, league, team name, and season are required' 
+                error: `Hall of Fame entry already exists for ${league} Season ${season}. Entry: ${existingEntry.player_name} (${existingEntry.team_name}). Each league can only have one entry per season.` 
             });
         }
 
+        // Check how many times this player has been in Hall of Fame
+        const { data: existingEntries, error: countError } = await supabase
+            .from('hall_of_fame_web')
+            .select('id')
+            .eq('player_name', player_name);
+
+        if (countError) throw countError;
+
+        const achievementCount = (existingEntries?.length || 0) + 1; // Include this new entry
+
         const { data, error } = await supabase
             .from('hall_of_fame_web')
-            .insert({
-                player_name: player_name.trim(),
-                league: league.trim(),
-                team_name: team_name.trim(),
-                team_logo: team_logo || '',
-                player_image: player_image || '',
-                season: parseInt(season) || 1
-            })
+            .insert([{
+                player_name,
+                league,
+                team_name,
+                season,
+                team_logo,
+                player_image,
+                email: email || '',
+                phone: phone || '',
+                achievement_count: achievementCount,
+                created_at: new Date().toISOString()
+            }])
             .select()
             .single();
 
         if (error) throw error;
 
-        res.status(201).json({ 
-            success: true, 
-            message: 'Hall of Fame entry added', 
-            data 
+        // Send email notification if email provided
+        if (email && email.trim()) {
+            try {
+                console.log(`📧 Attempting to send Hall of Fame notification to: ${email}`);
+                console.log(`📧 Email details:`, {
+                    player_name,
+                    league,
+                    team_name,
+                    season,
+                    achievement_count: achievementCount,
+                    phone: phone || 'Not provided'
+                });
+                
+                await sendHallOfFameNotification({
+                    player_name,
+                    email,
+                    league,
+                    team_name,
+                    season,
+                    achievement_count: achievementCount,
+                    phone: phone || ''
+                });
+                
+                console.log(`✅ Hall of Fame notification sent successfully to ${email}`);
+            } catch (emailErr) {
+                console.error('❌ Failed to send Hall of Fame notification email:', emailErr);
+                console.error('❌ Email error details:', emailErr.message);
+                // Don't fail the request if email fails
+            }
+        } else {
+            console.log(`ℹ️ No email provided for Hall of Fame entry: ${player_name}`);
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Hall of Fame entry created successfully',
+            data
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -939,7 +998,7 @@ router.post('/hall-of-fame-web', async (req, res) => {
 // Update Hall of Fame Web entry
 router.put('/hall-of-fame-web/:id', async (req, res) => {
     try {
-        const { player_name, league, team_name, team_logo, player_image, season } = req.body;
+        const { player_name, league, team_name, team_logo, player_image, season, email, phone } = req.body;
         const { id } = req.params;
 
         const updateData = {};
@@ -949,6 +1008,8 @@ router.put('/hall-of-fame-web/:id', async (req, res) => {
         if (team_logo !== undefined) updateData.team_logo = team_logo;
         if (player_image !== undefined) updateData.player_image = player_image;
         if (season !== undefined) updateData.season = parseInt(season);
+        if (email !== undefined) updateData.email = email || '';
+        if (phone !== undefined) updateData.phone = phone || '';
 
         const { data, error } = await supabase
             .from('hall_of_fame_web')
@@ -985,4 +1046,60 @@ router.delete('/hall-of-fame-web/:id', async (req, res) => {
     }
 });
 
+// Upload Hall of Fame images to Supabase Storage
+const { uploadImage } = require('../config/multer-images');
+
+router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, error: 'No image file provided' });
+        }
+
+        const file = req.file;
+        const fileExt = file.originalname.split('.').pop();
+        const fileName = `hof_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+        // Upload to Supabase Storage
+        const { data, error } = await supabase
+            .storage
+            .from('hall-of-fame')
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+                upsert: false
+            });
+
+        if (error) {
+            console.error('Supabase storage error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to upload image' });
+        }
+
+        // Get public URL
+        const { data: { publicUrl } } = supabase
+            .storage
+            .from('hall-of-fame')
+            .getPublicUrl(fileName);
+
+        res.json({ success: true, url: publicUrl });
+    } catch (err) {
+        console.error('Upload error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 module.exports = router;
+
+// Test email configuration endpoint
+router.get('/test-email', verifyAdmin, async (req, res) => {
+    try {
+        const result = await testEmailConfiguration();
+        res.json({
+            success: result,
+            message: result ? 'Email configuration is working' : 'Email configuration test failed'
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            error: err.message
+        });
+    }
+});

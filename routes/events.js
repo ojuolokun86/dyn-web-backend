@@ -26,16 +26,130 @@ const verifyAdmin = (req, res, next) => {
   }
 };
 
+// Get all contenders from all active events (public endpoint)
+router.get('/all-contenders', async (req, res) => {
+  try {
+    // Get all events that are not closed/winner_announced
+    const { data: events, error: eventsError } = await db
+      .from('events')
+      .select('*')
+      .or('status.neq.closed,status.neq.winner_announced')
+      .order('created_at', { ascending: false });
+
+    if (eventsError) {
+      console.error('❌ Error fetching events:', eventsError);
+      throw eventsError;
+    }
+
+
+    if (!events || events.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        message: 'No active events found'
+      });
+    }
+
+    // Get contenders for each active event
+    const allContendersWithEvents = [];
+    
+    for (const event of events) {
+      const { data: contenders, error: contendersError } = await db
+        .from('contenders')
+        .select('*')
+        .eq('event_id', event.id)
+        .order('total_points', { ascending: false });
+
+      if (contendersError) {
+        console.error(`❌ Error fetching contenders for event ${event.id}:`, contendersError);
+        continue;
+      }
+
+      if (contenders && contenders.length > 0) {
+        // Add event info to each contender
+        const contendersWithEventInfo = contenders.map(contender => ({
+          ...contender,
+          event_name: event.name,
+          event_id: event.id,
+          event_status: event.status
+        }));
+        
+        allContendersWithEvents.push(...contendersWithEventInfo);
+      }
+    }
+
+
+    res.json({
+      success: true,
+      data: allContendersWithEvents
+    });
+  } catch (err) {
+    console.error('❌ Error in /events/all-contenders:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// Get event with contenders (public endpoint)
+router.get('/with-contenders', async (req, res) => {
+  try {
+    // Get events that are not closed/winner_announced and have contenders
+    const { data, error } = await db
+      .from('events')
+      .select(`
+        *,
+        contenders:event_id(count)
+      `)
+      .or('status.neq.closed,status.neq.winner_announced')
+      .gte('contenders', 1)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('❌ Database error:', error);
+      throw error;
+    }
+
+    if (!data) {
+      return res.json({
+        success: true,
+        data: null,
+        message: 'No event with contenders at this time'
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (err) {
+    console.error('❌ Error in /events/with-contenders:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 // Get current active event (public endpoint)
 router.get('/current', async (req, res) => {
   try {
+    // First try to get the most recent event (not closed/winner_announced)
     const { data, error } = await db
       .from('events')
       .select('*')
-      .eq('status', 'open')
+      .or('status.neq.closed,status.neq.winner_announced')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .single();
 
+
     if (error && error.code !== 'PGRST116') {
+      console.error('❌ Database error:', error);
       throw error;
     }
 
@@ -52,6 +166,7 @@ router.get('/current', async (req, res) => {
       data
     });
   } catch (err) {
+    console.error('❌ Error in /events/current:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -83,7 +198,6 @@ router.get('/', verifyAdmin, async (req, res) => {
 
 // Get past winners (within 3 months)
 router.get('/past-winners', async (req, res) => {
-  //console.log('Fetching past winners...');
   try {
     const { data: events, error: eventsErr } = await db
       .from('events')
@@ -91,7 +205,6 @@ router.get('/past-winners', async (req, res) => {
       .eq('status', 'winner_announced')
       .order('ended_at', { ascending: false });
 
-    //console.log('Events query result:', { events, eventsErr });
     
     if (eventsErr) {
       //console.error('Events query error:', eventsErr);
@@ -99,25 +212,21 @@ router.get('/past-winners', async (req, res) => {
     }
 
     if (!events || events.length === 0) {
-      console.log('No events found');
+      //console.log('No events found');
       return res.json({ success: true, data: [] });
     }
 
-    //console.log(`Found ${events.length} events`);
     
     // Get winner details for each event
     const pastWinners = [];
     const threeMonthsAgo = new Date();
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    //console.log('Three months ago date:', threeMonthsAgo);
 
     for (const event of events) {
       const eventDate = new Date(event.ended_at || event.updated_at);
-      //console.log(`Processing event: ${event.name}, date: ${eventDate}`);
       
       // Only include events from last 3 months
       if (eventDate > threeMonthsAgo) {
-        //console.log('Event is within 3 months, fetching winner...');
         // Get winner details
         const { data: winner, error: winnerErr } = await db
           .from('contenders')
@@ -125,7 +234,6 @@ router.get('/past-winners', async (req, res) => {
           .eq('id', event.winner_id)
           .single();
 
-        //console.log('Winner query result:', { winner, winnerErr });
 
         if (!winnerErr && winner) {
           const winnerData = {
@@ -141,20 +249,15 @@ router.get('/past-winners', async (req, res) => {
             ended_at: event.ended_at,
             updated_at: event.updated_at
           };
-          //console.log('Adding winner data:', winnerData);
           pastWinners.push(winnerData);
         } else {
-          //console.error('Winner query error for event', event.name, winnerErr);
         }
       } else {
-        //console.log('Event is older than 3 months, skipping');
       }
     }
 
-    //console.log('Final pastWinners array:', pastWinners);
     res.json({ success: true, data: pastWinners });
   } catch (err) {
-   // console.error('Error fetching past winners:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -631,6 +734,7 @@ router.get('/:id/contenders', async (req, res) => {
       .eq('event_id', eventId)
       .order('total_points', { ascending: false });
 
+
     if (error) throw error;
 
     res.json({
@@ -638,6 +742,7 @@ router.get('/:id/contenders', async (req, res) => {
       data: data || []
     });
   } catch (err) {
+    console.error(`❌ Error fetching contenders for event ${req.params.id}:`, err);
     res.status(500).json({
       success: false,
       error: err.message
