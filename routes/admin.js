@@ -1,8 +1,9 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/db');
-const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail, sendHallOfFameNotification, testEmailConfiguration } = require('../services/email-service');
+const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail, sendHallOfFameNotification, testEmailConfiguration, sendContenderNotification } = require('../services/email-service');
 const { isValidEmail, isValidPassword, isValidUsername, hashPassword, comparePassword } = require('../utils/validation');
+const { uploadImage } = require('../config/multer-images');
 
 const router = express.Router();
 
@@ -665,7 +666,7 @@ router.get('/approve-via-email', async (req, res) => {
 });
 
 // ===== PAST WINNERS MANAGEMENT =====
-// Get all past winners (admin view - includes all, not just 3 months)
+// Get all past winners (from closed events with winners)
 router.get('/past-winners', async (req, res) => {
     try {
         const { data: events, error } = await supabase
@@ -676,33 +677,30 @@ router.get('/past-winners', async (req, res) => {
 
         if (error) throw error;
 
-        if (!events || events.length === 0) {
-            return res.json({ success: true, data: [] });
-        }
-
         const pastWinners = [];
 
         for (const event of events) {
-            const { data: winner, error: winnerErr } = await supabase
-                .from('contenders')
-                .select('*')
-                .eq('id', event.winner_id)
-                .single();
+            if (event.winner_id) {
+                const { data: winner, error: winnerErr } = await supabase
+                    .from('contenders')
+                    .select('*')
+                    .eq('id', event.winner_id)
+                    .single();
 
-            if (!winnerErr && winner) {
-                pastWinners.push({
-                    event_id: event.id,
-                    event_name: event.name,
-                    winner_id: event.winner_id,
-                    winner_name: winner.name,
-                    winner_class: winner.class,
-                    winner_country: winner.country,
-                    winner_picture: winner.picture,
-                    winner_video: winner.video,
-                    winner_points: winner.total_points || 0,
-                    ended_at: event.ended_at,
-                    updated_at: event.updated_at
-                });
+                if (!winnerErr && winner) {
+                    pastWinners.push({
+                        id: event.id,
+                        winner_name: winner.name,
+                        event_name: event.name,
+                        winner_class: winner.class || '',
+                        winner_country: winner.country || '',
+                        winner_points: winner.total_points || 0,
+                        winner_picture: winner.picture || '',
+                        winner_video: winner.video || '',
+                        ended_at: event.ended_at,
+                        updated_at: event.updated_at
+                    });
+                }
             }
         }
 
@@ -712,35 +710,102 @@ router.get('/past-winners', async (req, res) => {
     }
 });
 
-// Add a manual past winner (for historical data)
+// Add a manual past winner (creates contender and closed event)
 router.post('/past-winners', async (req, res) => {
     try {
+        console.log('🔧 DEBUG: Past Winners POST route called');
+        console.log('🔧 DEBUG: Request body:', req.body);
+        console.log('🔧 DEBUG: Request headers:', req.headers);
+        
         const { name, event_name, class: className, country, points, date, picture, video } = req.body;
+        
+        console.log('🔧 DEBUG: Extracted data:', {
+            name,
+            event_name,
+            className,
+            country,
+            points,
+            date,
+            picture: picture ? 'URL provided' : 'No URL',
+            video
+        });
 
         if (!name || !event_name) {
+            console.log('🔧 DEBUG: Missing required fields - name or event_name');
             return res.status(400).json({ success: false, error: 'Name and event name are required' });
         }
 
-        // Insert into past_winners table
-        const { data, error } = await supabase
-            .from('past_winners')
-            .insert({
-                winner_name: name,
-                event_name: event_name,
-                winner_class: className || '',
-                winner_country: country || '',
-                winner_points: points || 0,
-                winner_date: date || new Date().toISOString(),
-                winner_picture: picture || '',
-                winner_video: video || ''
-            })
-            .select()
+        console.log('🔧 DEBUG: Validation passed, creating contender and event...');
+        
+        // First create contender
+        const contenderData = {
+            name: name,
+            class: className || '',
+            country: country || '',
+            total_points: parseInt(points) || 0,
+            picture: picture || '',
+            video: video || '',
+            created_by: req.admin?.email || 'admin@system.com'
+        };
+        
+        console.log('🔧 DEBUG: Contender data to insert:', contenderData);
+        console.log('🔧 DEBUG: Data types:', {
+            name: typeof name,
+            class: typeof (className || ''),
+            country: typeof (country || ''),
+            total_points: typeof parseInt(points),
+            picture: typeof (picture || ''),
+            video: typeof (video || ''),
+            created_by: typeof (req.admin?.email || 'admin@system.com')
+        });
+        
+        const { data: contender, error: contenderError } = await supabase
+            .from('contenders')
+            .insert(contenderData)
+            .select('id, name, class, country, total_points, picture, video, created_at, updated_at')
             .single();
 
-        if (error) throw error;
+        if (contenderError) {
+            console.error('🔧 DEBUG: Contender creation error:', contenderError);
+            throw contenderError;
+        }
 
-        res.status(201).json({ success: true, message: 'Past winner added successfully', data });
+        console.log('🔧 DEBUG: Contender created:', contender);
+
+        // Then create the closed event with this contender as winner
+        const { data: event, error: eventError } = await supabase
+            .from('events')
+            .insert({
+                name: event_name,
+                winner_id: contender.id,
+                status: 'winner_announced',
+                ended_at: date || new Date().toISOString(),
+                created_by: req.admin?.email || 'admin@system.com',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .select('id, name, winner_id, status, ended_at, created_at, updated_at')
+            .single();
+
+        if (eventError) {
+            console.error('🔧 DEBUG: Event creation error:', eventError);
+            throw eventError;
+        }
+
+        console.log('🔧 DEBUG: Event created:', event);
+        console.log('🔧 DEBUG: Sending success response');
+
+        res.status(201).json({ 
+            success: true, 
+            message: 'Past winner added successfully', 
+            data: {
+                contender,
+                event
+            }
+        });
     } catch (err) {
+        console.error('🔧 DEBUG: Error in Past Winners POST route:', err);
+        console.error('🔧 DEBUG: Error stack:', err.stack);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -852,6 +917,64 @@ router.delete('/hall-of-fame/:id', async (req, res) => {
 
         res.json({ success: true, message: 'Hall of Fame entry deleted' });
     } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Upload Past Winner image to Supabase Storage
+router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), async (req, res) => {
+    try {
+        console.log('🔧 DEBUG: Past Winners upload route called');
+        console.log('🔧 DEBUG: Request file:', req.file);
+        console.log('🔧 DEBUG: Request headers:', req.headers);
+        
+        if (!req.file) {
+            console.log('🔧 DEBUG: No file provided');
+            return res.status(400).json({ success: false, error: 'No image file provided' });
+        }
+
+        const file = req.file;
+        const fileExt = file.originalname.split('.').pop();
+        const fileName = `past-winner_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        
+        console.log('🔧 DEBUG: File details:', {
+            originalname: file.originalname,
+            mimetype: file.mimetype,
+            size: file.size,
+            extension: fileExt,
+            generatedFileName: fileName
+        });
+
+        // Upload to Supabase Storage
+        console.log('🔧 DEBUG: Starting upload to profiles bucket...');
+        const { data, error } = await supabase
+            .storage
+            .from('profiles')  // Use existing profile bucket
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+                upsert: false
+            });
+
+        if (error) {
+            console.error('🔧 DEBUG: Supabase storage error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to upload image' });
+        }
+
+        console.log('🔧 DEBUG: Upload successful:', data);
+
+        // Get public URL
+        const { data: { publicUrl } } = supabase
+            .storage
+            .from('profiles')  // Use existing profile bucket
+            .getPublicUrl(fileName);
+
+        console.log('🔧 DEBUG: Public URL generated:', publicUrl);
+        console.log('🔧 DEBUG: Sending success response');
+
+        res.json({ success: true, url: publicUrl });
+    } catch (err) {
+        console.error('🔧 DEBUG: Upload error:', err);
+        console.error('🔧 DEBUG: Error stack:', err.stack);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -995,16 +1118,108 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
     }
 });
 
-// Update Hall of Fame Web entry
-router.put('/hall-of-fame-web/:id', async (req, res) => {
+// Get single Hall of Fame Web entry
+router.get('/hall-of-fame-web/:id', async (req, res) => {
     try {
-        const { player_name, league, team_name, team_logo, player_image, season, email, phone } = req.body;
         const { id } = req.params;
+        
+        const { data, error } = await supabase
+            .from('hall_of_fame_web')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Hall of Fame entry not found' 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            data: data 
+        });
+    } catch (err) {
+        console.error('Error in Hall of Fame GET route:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.put('/hall-of-fame-web/:id', uploadImage.fields([
+    { name: 'playerImageFile', maxCount: 1 },
+    { name: 'teamLogoFile', maxCount: 1 }
+]), async (req, res) => {
+    try {
+        const { playerName, league, team, season, email, phone } = req.body;
+        const { id } = req.params;
+        
+        // Handle file uploads
+        let team_logo = req.body.team_logo; // Existing URL if no new file uploaded
+        let player_image = req.body.player_image; // Existing URL if no new file uploaded
+        
+        // Handle player image upload
+        if (req.files && req.files.playerImageFile && req.files.playerImageFile.length > 0) {
+            const file = req.files.playerImageFile[0];
+            const fileExt = file.originalname.split('.').pop();
+            const fileName = `hof_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+            // Upload to Supabase Storage
+            const { data: uploadData, error: uploadError } = await supabase
+                .storage
+                .from('profiles')  // Use existing profile bucket
+                .upload(fileName, file.buffer, {
+                    contentType: file.mimetype,
+                    upsert: false
+                });
+
+            if (uploadError) {
+                console.error('Supabase storage error for player image:', uploadError);
+                return res.status(500).json({ success: false, error: 'Failed to upload player image' });
+            }
+
+            // Get public URL
+            const { data: { publicUrl } } = supabase
+                .storage
+                .from('profiles')  // Use existing profile bucket
+                .getPublicUrl(fileName);
+            
+            player_image = publicUrl;
+        }
+        
+        // Handle team logo upload
+        if (req.files && req.files.teamLogoFile && req.files.teamLogoFile.length > 0) {
+            const file = req.files.teamLogoFile[0];
+            const fileExt = file.originalname.split('.').pop();
+            const fileName = `hof_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+            // Upload to Supabase Storage
+            const { data: uploadData, error: uploadError } = await supabase
+                .storage
+                .from('profiles')  // Use existing profile bucket
+                .upload(fileName, file.buffer, {
+                    contentType: file.mimetype,
+                    upsert: false
+                });
+
+            if (uploadError) {
+                console.error('Supabase storage error for team logo:', uploadError);
+                return res.status(500).json({ success: false, error: 'Failed to upload team logo' });
+            }
+
+            // Get public URL
+            const { data: { publicUrl } } = supabase
+                .storage
+                .from('profiles')  // Use existing profile bucket
+                .getPublicUrl(fileName);
+            
+            team_logo = publicUrl;
+        }
 
         const updateData = {};
-        if (player_name !== undefined) updateData.player_name = player_name.trim();
+        if (playerName !== undefined) updateData.player_name = playerName.trim();
         if (league !== undefined) updateData.league = league.trim();
-        if (team_name !== undefined) updateData.team_name = team_name.trim();
+        if (team !== undefined) updateData.team_name = team.trim();
         if (team_logo !== undefined) updateData.team_logo = team_logo;
         if (player_image !== undefined) updateData.player_image = player_image;
         if (season !== undefined) updateData.season = parseInt(season);
@@ -1018,14 +1233,19 @@ router.put('/hall-of-fame-web/:id', async (req, res) => {
             .select()
             .single();
 
-        if (error) throw error;
+        if (error) {
+            console.error('Supabase update error:', error);
+            return res.status(500).json({ success: false, error: error.message });
+        }
 
-        res.json({ 
-            success: true, 
-            message: 'Hall of Fame entry updated', 
-            data 
+        res.json({
+            success: true,
+            message: 'Hall of Fame entry updated',
+            data: data
         });
+        
     } catch (err) {
+        console.error('Error in Hall of Fame PUT route:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1047,8 +1267,6 @@ router.delete('/hall-of-fame-web/:id', async (req, res) => {
 });
 
 // Upload Hall of Fame images to Supabase Storage
-const { uploadImage } = require('../config/multer-images');
-
 router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image'), async (req, res) => {
     try {
         if (!req.file) {
@@ -1062,7 +1280,7 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
         // Upload to Supabase Storage
         const { data, error } = await supabase
             .storage
-            .from('hall-of-fame')
+            .from('profiles')  // Use existing profile bucket
             .upload(fileName, file.buffer, {
                 contentType: file.mimetype,
                 upsert: false
@@ -1076,13 +1294,157 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
         // Get public URL
         const { data: { publicUrl } } = supabase
             .storage
-            .from('hall-of-fame')
+            .from('profiles')  // Use existing profile bucket
             .getPublicUrl(fileName);
 
         res.json({ success: true, url: publicUrl });
     } catch (err) {
         console.error('Upload error:', err);
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Resend Contender Email
+router.post('/contenders/:id/resend-email', async (req, res) => {
+    console.log('🔧 DEBUG: Contender email resend route called');
+    console.log('🔧 DEBUG: Request params:', req.params);
+    console.log('🔧 DEBUG: Request headers:', req.headers);
+    
+    try {
+        const { id } = req.params;
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        
+        console.log('🔧 DEBUG: Extracted token:', token ? 'present' : 'missing');
+        
+        if (!token) {
+            console.log('❌ DEBUG: No token provided, returning 401');
+            return res.status(401).json({
+                success: false,
+                message: 'Authorization required'
+            });
+        }
+        
+        // Get contender data
+        console.log('🔧 DEBUG: Fetching contender with ID:', id);
+        const { data: contender } = await supabase
+            .from('contenders')
+            .select('*')
+            .eq('id', id)
+            .single();
+            
+        if (!contender) {
+            console.log('❌ DEBUG: Contender not found in database');
+            return res.status(404).json({
+                success: false,
+                message: 'Contender not found'
+            });
+        }
+        
+        console.log('🔧 DEBUG: Contender found:', contender);
+        console.log('🔧 DEBUG: Attempting to send email to:', contender.email);
+        
+        // Get event information for the email
+        console.log('🔧 DEBUG: Fetching event information for event ID:', contender.event_id);
+        const { data: event } = await supabase
+            .from('events')
+            .select('name')
+            .eq('id', contender.event_id)
+            .single();
+            
+        console.log('🔧 DEBUG: Event found:', event);
+        
+        // Send contender notification email with full event details
+        await sendContenderNotification({
+            name: contender.name.trim(),
+            email: contender.email.trim(),
+            eventName: event?.name || 'Unknown Event',
+            class: contender.class || 'N/A',
+            country: contender.country || 'N/A'
+        });
+        
+        console.log('✅ DEBUG: Email sent successfully to:', contender.email);
+        
+        res.json({
+            success: true,
+            message: 'Contender email sent successfully',
+            data: { email: contender.email, player_name: contender.name }
+        });
+        
+    } catch (err) {
+        console.error('❌ DEBUG: Error in contender email resend route:', err);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to resend contender email',
+            error: err.message
+        });
+    }
+});
+
+// Resend Hall of Fame Email
+router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
+    console.log('🔧 DEBUG: Hall of Fame email resend route called');
+    console.log('🔧 DEBUG: Request params:', req.params);
+    console.log('🔧 DEBUG: Request headers:', req.headers);
+    
+    try {
+        const { id } = req.params;
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        
+        console.log('🔧 DEBUG: Extracted token:', token ? 'present' : 'missing');
+        
+        if (!token) {
+            console.log('❌ DEBUG: No token provided, returning 401');
+            return res.status(401).json({
+                success: false,
+                message: 'Authorization required'
+            });
+        }
+        
+        // Get Hall of Fame entry
+        console.log('🔧 DEBUG: Fetching Hall of Fame entry with ID:', id);
+        const { data: entry } = await supabase
+            .from('hall_of_fame_web')
+            .select('*')
+            .eq('id', id)
+            .single();
+            
+        if (!entry) {
+            console.log('❌ DEBUG: Hall of Fame entry not found in database');
+            return res.status(404).json({
+                success: false,
+                message: 'Hall of Fame entry not found'
+            });
+        }
+        
+        console.log('🔧 DEBUG: Hall of Fame entry found:', entry);
+        console.log('🔧 DEBUG: Attempting to send Hall of Fame email to:', entry.email);
+        
+        // Send Hall of Fame notification email
+        await sendHallOfFameNotification({
+            player_name: entry.player_name,
+            email: entry.email,
+            league: entry.league,
+            team_name: entry.team_name,
+            season: entry.season,
+            achievement_count: entry.trophies || 1,
+            phone: entry.phone || 'Not provided'
+        });
+        
+        console.log('✅ DEBUG: Hall of Fame email sent successfully to:', entry.email);
+        
+        res.json({
+            success: true,
+            message: 'Hall of Fame email sent successfully',
+            data: { email: entry.email, player_name: entry.player_name }
+        });
+        
+    } catch (err) {
+        console.error('❌ DEBUG: Failed to send Hall of Fame email:', err);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to resend Hall of Fame email',
+            error: err.message
+        });
     }
 });
 

@@ -16,7 +16,8 @@ const DYNAMIC_EFOOTBALL_COMMUNITY_origins = [
   'http://localhost:3000', // if you use this
   'http://localhost:5000', // optional
   'http://127.0.0.1:8080',
-  'http://127.0.0.1:59135' // your current frontend
+  'http://127.0.0.1:59135',
+  'https://dynamicfootball.netlify.app'
 ];
 
 app.use(cors({
