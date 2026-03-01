@@ -9,6 +9,7 @@ const verifyAdmin = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) {
+      console.warn('⚠️ verifyAdmin: missing token for request', req.method, req.originalUrl);
       return res.status(401).json({
         success: false,
         error: 'No token provided'
@@ -19,6 +20,7 @@ const verifyAdmin = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (err) {
+    console.warn('⚠️ verifyAdmin: token verify failed', err.message);
     res.status(401).json({
       success: false,
       error: 'Invalid or expired token'
@@ -174,32 +176,58 @@ router.get('/current', async (req, res) => {
   }
 });
 
+// Get homepage events (public) - upcoming event + banner info
+router.get('/home', async (req, res) => {
+  try {
+    const { data: events, error } = await db
+      .from('events')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    let upcoming = null;
+    let bannerEvent = null;
+    if (events && events.length) {
+      upcoming = events.find(e => e.status === 'open') || events.find(e => e.status === 'draft') || null;
+      bannerEvent = events.find(e => e.status === 'winner_announced') || null;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        upcoming,
+        banner: bannerEvent
+      }
+    });
+  } catch (error) {
+    console.error('Error in /events/home:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load events'
+    });
+  }
+});
+
 // Get all events (admin only)
 router.get('/', verifyAdmin, async (req, res) => {
   try {
-    console.log('🔧 DEBUG: Admin events GET endpoint called');
-    console.log('🔧 DEBUG: Admin from token:', req.admin);
-    
     const { data, error } = await db
       .from('events')
       .select('*')
       .order('created_at', { ascending: false });
 
-    console.log('🔧 DEBUG: Events query result:', { data, error });
-
     if (error) {
-      console.error('🔧 DEBUG: Events query error:', error);
+      console.error('Events query error:', error);
       throw error;
     }
-
-    console.log('🔧 DEBUG: Returning events data:', data);
 
     res.json({
       success: true,
       data
     });
   } catch (err) {
-    console.error('🔧 DEBUG: Events GET error:', err);
+    console.error('Events GET error:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -223,7 +251,7 @@ router.get('/past-winners', async (req, res) => {
     }
 
     if (!events || events.length === 0) {
-      //console.log('No events found');
+      //
       return res.json({ success: true, data: [] });
     }
 
@@ -361,10 +389,6 @@ router.post('/', verifyAdmin, async (req, res) => {
 // Open event (start voting)
 router.put('/:id/open', verifyAdmin, async (req, res) => {
   try {
-    console.log('🔧 DEBUG: Open event request started');
-    console.log('🔧 DEBUG: Event ID:', req.params.id);
-    console.log('🔧 DEBUG: Admin from token:', req.admin);
-    
     // Get current event
     const { data: event, error: getError } = await db
       .from('events')
@@ -372,12 +396,9 @@ router.put('/:id/open', verifyAdmin, async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
-    console.log('🔧 DEBUG: Current event data:', { event, getError });
-
     if (getError) throw getError;
 
     if (!event) {
-      console.log('🔧 DEBUG: Event not found');
       return res.status(404).json({
         success: false,
         error: 'Event not found'
@@ -385,14 +406,11 @@ router.put('/:id/open', verifyAdmin, async (req, res) => {
     }
 
     if (event.status === 'open') {
-      console.log('🔧 DEBUG: Event is already open');
       return res.status(400).json({
         success: false,
         error: 'Event is already open'
       });
     }
-
-    console.log('🔧 DEBUG: Closing other open events...');
 
     // Close any other open events
     const { data: closedEvents, error: closeError } = await db
@@ -400,41 +418,33 @@ router.put('/:id/open', verifyAdmin, async (req, res) => {
       .update({ status: 'closed', ended_at: new Date().toISOString() })
       .eq('status', 'open');
 
-    console.log('🔧 DEBUG: Closed other events result:', { closedEvents, closeError });
-
     if (closeError) throw closeError;
-
-    console.log('🔧 DEBUG: Opening this event...');
 
     // Open this event
     const { data, error } = await db
       .from('events')
-      .update({
-        status: 'open',
-        started_at: new Date().toISOString()
+      .update({ 
+        status: 'open'
       })
       .eq('id', req.params.id)
       .select()
       .single();
 
-    console.log('🔧 DEBUG: Event open result:', { data, error });
-
     if (error) {
-      console.error('🔧 DEBUG: Error opening event:', error);
+      console.error('Error opening event:', error);
       throw error;
     }
 
-    console.log('🔧 DEBUG: Event opened successfully');
-
     res.json({
       success: true,
-      message: 'Event opened for voting',
+      message: 'Event opened successfully',
       data
     });
-  } catch (err) {
+  } catch (error) {
+    console.error('Error in open event:', error);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: error.message
     });
   }
 });
@@ -475,6 +485,56 @@ router.put('/:id/close', verifyAdmin, async (req, res) => {
       data
     });
   } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// Close event back to draft (revert from open)
+router.put('/:id/close-to-draft', verifyAdmin, async (req, res) => {
+  try {
+    const { data: event, error: getError } = await db
+      .from('events')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+
+    if (getError) throw getError;
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        error: 'Event not found'
+      });
+    }
+
+    if (event.status !== 'open') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only open events can be closed back to draft'
+      });
+    }
+
+    const { data, error } = await db
+      .from('events')
+      .update({
+        status: 'draft'
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      message: 'Event closed back to draft',
+      data
+    });
+  } catch (err) {
+    console.error('Close event back to draft error:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -600,33 +660,33 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 // Create vote tables for an event
 router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
   try {
-    console.log('🔧 DEBUG: Vote table creation started');
-    console.log('🔧 DEBUG: Request body:', req.body);
-    console.log('🔧 DEBUG: Event ID:', req.params.id);
+    
+    
+    
     
     const { voteTables } = req.body;
     const eventId = req.params.id;
 
-    console.log('🔧 DEBUG: Extracted data:', { voteTables, eventId });
+    
 
     // Check if event is closed
     const eventCheck = await checkEventClosed(eventId);
-    console.log('🔧 DEBUG: Event closed check result:', eventCheck);
+    
     
     if (eventCheck.closed) {
-      console.log('🔧 DEBUG: Event is closed, cannot create vote tables');
+      
       return res.status(400).json({ success: false, error: eventCheck.error });
     }
 
     if (!voteTables || !Array.isArray(voteTables)) {
-      console.log('🔧 DEBUG: Invalid voteTables data');
+      
       return res.status(400).json({
         success: false,
         error: 'voteTables array is required'
       });
     }
 
-    console.log('🔧 DEBUG: Validating event exists...');
+    
 
     // Verify event exists
     const { data: event, error: eventError } = await db
@@ -635,17 +695,17 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       .eq('id', eventId)
       .single();
 
-    console.log('🔧 DEBUG: Event validation result:', { event, eventError });
+    
 
     if (eventError || !event) {
-      console.log('🔧 DEBUG: Event not found');
+      
       return res.status(404).json({
         success: false,
         error: 'Event not found'
       });
     }
 
-    console.log('🔧 DEBUG: Checking existing vote tables...');
+    
 
     // Check existing vote tables for this event
     const { data: existingTables, error: existingError } = await db
@@ -653,12 +713,12 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       .select('table_number, points_per_vote')
       .eq('event_id', eventId);
 
-    console.log('🔧 DEBUG: Existing vote tables:', { existingTables, existingError });
+    
 
     if (existingError) {
       console.error('🔧 DEBUG: Error checking existing tables:', existingError);
     } else if (existingTables && existingTables.length > 0) {
-      console.log('🔧 DEBUG: Vote tables already exist, returning them');
+      
       return res.json({
         success: true,
         message: 'Vote tables already exist for this event',
@@ -666,7 +726,7 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       });
     }
 
-    console.log('🔧 DEBUG: No existing tables, creating new ones...');
+    
 
     // Create vote tables
     const { data, error } = await db
@@ -1314,27 +1374,27 @@ router.delete('/:id/contenders/:contenderId', verifyAdmin, async (req, res) => {
 // Submit a vote for a contender
 router.post('/:id/vote', async (req, res) => {
   try {
-    console.log('🔧 DEBUG: Vote submission started');
-    console.log('🔧 DEBUG: Request body:', req.body);
-    console.log('🔧 DEBUG: Event ID:', req.params.id);
-    console.log('🔧 DEBUG: Voter IP:', req.ip || req.connection.remoteAddress);
+    
+    
+    
+    
     
     const { contenderId, voteTableId } = req.body;
     const eventId = req.params.id;
     const voterIp = req.ip || req.connection.remoteAddress;
 
-    console.log('🔧 DEBUG: Extracted data:', { contenderId, voteTableId, eventId, voterIp });
+    
 
     // Validate input
     if (!contenderId || !voteTableId) {
-      console.log('🔧 DEBUG: Validation failed - missing IDs');
+      
       return res.status(400).json({
         success: false,
         error: 'Contender ID and Vote Table ID are required'
       });
     }
 
-    console.log('🔧 DEBUG: Validation passed, checking event...');
+    
 
     // Verify event exists and is open
     const { data: event, error: eventError } = await db
@@ -1343,10 +1403,10 @@ router.post('/:id/vote', async (req, res) => {
       .eq('id', eventId)
       .single();
 
-    console.log('🔧 DEBUG: Event query result:', { event, eventError });
+    
 
     if (eventError || !event) {
-      console.log('🔧 DEBUG: Event not found');
+      
       return res.status(404).json({
         success: false,
         error: 'Event not found'
@@ -1354,14 +1414,14 @@ router.post('/:id/vote', async (req, res) => {
     }
 
     if (event.status !== 'open') {
-      console.log('🔧 DEBUG: Event not open for voting, status:', event.status);
+      
       return res.status(400).json({
         success: false,
         error: 'Voting is not open for this event'
       });
     }
 
-    console.log('🔧 DEBUG: Event is open, checking contender...');
+    
 
     // Verify contender exists and belongs to event
     const { data: contender, error: contenderError } = await db
@@ -1371,17 +1431,17 @@ router.post('/:id/vote', async (req, res) => {
       .eq('event_id', eventId)
       .single();
 
-    console.log('🔧 DEBUG: Contender query result:', { contender, contenderError });
+    
 
     if (contenderError || !contender) {
-      console.log('🔧 DEBUG: Contender not found for this event');
+      
       return res.status(404).json({
         success: false,
         error: 'Contender not found for this event'
       });
     }
 
-    console.log('🔧 DEBUG: Contender found, checking vote table...');
+    
 
     // Verify vote table exists and belongs to event
     const { data: voteTable, error: voteTableError } = await db
@@ -1391,17 +1451,17 @@ router.post('/:id/vote', async (req, res) => {
       .eq('event_id', eventId)
       .single();
 
-    console.log('🔧 DEBUG: Vote table query result:', { voteTable, voteTableError });
+    
 
     if (voteTableError || !voteTable) {
-      console.log('🔧 DEBUG: Vote table not found for this event');
+      
       return res.status(404).json({
         success: false,
         error: 'Vote table not found for this event'
       });
     }
 
-    console.log('🔧 DEBUG: Vote table found, checking existing votes...');
+    
 
     // Check if this IP has already voted for this table in this event
     const { data: existingVote, error: existingVoteError } = await db
@@ -1412,10 +1472,10 @@ router.post('/:id/vote', async (req, res) => {
       .eq('voter_ip', voterIp)
       .single();
 
-    console.log('🔧 DEBUG: Existing vote check result:', { existingVote, existingVoteError });
+    
 
     if (!existingVoteError && existingVote) {
-      console.log('🔧 DEBUG: User already voted for this table');
+      
       return res.status(400).json({
         success: false,
         error: 'You have already voted using this vote table'
@@ -1431,17 +1491,17 @@ router.post('/:id/vote', async (req, res) => {
       .eq('voter_ip', voterIp)
       .single();
 
-    console.log('🔧 DEBUG: Existing contender vote check result:', { existingContenderVote, existingContenderVoteError });
+    
 
     if (!existingContenderVoteError && existingContenderVote) {
-      console.log('🔧 DEBUG: User already voted for this contender');
+      
       return res.status(400).json({
         success: false,
         error: 'You have already voted for this contender. You must vote for different contenders using different vote tables.'
       });
     }
 
-    console.log('🔧 DEBUG: No existing votes found, creating vote record...');
+    
 
     // Create vote record
     const voteData = {
@@ -1453,7 +1513,7 @@ router.post('/:id/vote', async (req, res) => {
       voted_at: new Date().toISOString()
     };
 
-    console.log('🔧 DEBUG: Vote data to insert:', voteData);
+    
 
     const { data: voteRecord, error: voteError } = await db
       .from('contender_vote_records')
@@ -1461,14 +1521,14 @@ router.post('/:id/vote', async (req, res) => {
       .select()
       .single();
 
-    console.log('🔧 DEBUG: Vote record creation result:', { voteRecord, voteError });
+    
 
     if (voteError) {
       console.error('🔧 DEBUG: Vote record creation error:', voteError);
       throw voteError;
     }
 
-    console.log('🔧 DEBUG: Vote record created, updating contender points...');
+    
 
     // Update contender's total points
     const newTotalPoints = (contender.total_points || 0) + voteTable.points_per_vote;
@@ -1483,14 +1543,14 @@ router.post('/:id/vote', async (req, res) => {
       .update({ total_points: newTotalPoints })
       .eq('id', contenderId);
 
-    console.log('🔧 DEBUG: Points update result:', { updateError });
+    
 
     if (updateError) {
       console.error('🔧 DEBUG: Points update error:', updateError);
       throw updateError;
     }
 
-    console.log('🔧 DEBUG: Vote submission completed successfully');
+    
 
     res.status(201).json({
       success: true,

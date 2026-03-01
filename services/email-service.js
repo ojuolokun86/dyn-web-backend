@@ -61,7 +61,7 @@ async function testEmailConfiguration() {
 
 // Send Hall of Fame notification email
 async function sendHallOfFameNotification(hallOfFameData) {
-    console.log(hallOfFameData);
+    
     const { player_name, email, league, team_name, season, achievement_count, phone } = hallOfFameData;
     
     const mailOptions = {
@@ -109,7 +109,7 @@ async function sendHallOfFameNotification(hallOfFameData) {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log('Email sent successfully');
+        
     } catch (error) {
         console.error('Failed to send email:', error);
         throw error;
@@ -167,7 +167,7 @@ async function sendRegistrationToSuperAdmin(registrationData) {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log('✅ Registration email sent to superadmin');
+        
         return true;
     } catch (error) {
         console.error('❌ Error sending registration email:', error);
@@ -201,7 +201,7 @@ async function sendApprovalEmail(userData) {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log('✅ Approval email sent to user');
+        
         return true;
     } catch (error) {
         console.error('❌ Error sending approval email:', error);
@@ -241,7 +241,7 @@ async function sendRejectionEmail(userData) {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log('✅ Rejection email sent to user');
+        
         return true;
     } catch (error) {
         console.error('❌ Error sending rejection email:', error);
@@ -299,7 +299,7 @@ async function sendContenderNotification(contenderData) {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log('✅ Contender notification email sent to', mailOptions.to);
+        
         return true;
     } catch (error) {
         console.error('❌ Error sending contender notification email:', error);

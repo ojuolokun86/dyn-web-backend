@@ -83,14 +83,14 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`\n🚀 DYNAMIC EFOOTBALL COMMUNITY API Server running on http://localhost:${PORT}`);
-    console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`\n📚 Available endpoints:`);
-    console.log(`   GET  http://localhost:${PORT}/`);
-    console.log(`   GET  http://localhost:${PORT}/api/health`);
-    console.log(`   POST http://localhost:${PORT}/api/admin/login`);
-    console.log(`   GET  http://localhost:${PORT}/api/admin/verify`);
-    console.log(`\n`);
+
+
+
+
+
+
+
+
 });
 
 module.exports = app;

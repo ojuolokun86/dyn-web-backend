@@ -211,7 +211,7 @@ router.post('/approve', verifySuperAdmin, async (req, res) => {
                             .eq('id', existingAdmin.id)
                             .select();
                         adminData = updatedAdmin;
-                      //  console.log('Existing admin updated instead of insert');
+                      //  
                     } else {
                         console.error('Admin creation failed and no existing admin found');
                         return res.status(500).json({ success: false, message: 'Error creating admin account' });
@@ -369,7 +369,7 @@ router.post('/login', async (req, res) => {
                     process.env.JWT_SECRET || 'your_jwt_secret_key',
                     { expiresIn: '24h' }
                 );
-                console.log('Superadmin login via env credentials');
+                
                 return res.json({
                     success: true,
                     message: 'Login successful',
@@ -623,7 +623,7 @@ router.get('/approve-via-email', async (req, res) => {
                             .eq('id', existingAdmin.id)
                             .select();
                         adminData = updatedAdmin;
-                        console.log('Existing admin updated via email-approval');
+                        
                     } else {
                         console.error('Admin creation failed (email link) and no existing admin found');
                         return res.status(500).json({ success: false, message: 'Error creating admin account' });
@@ -713,9 +713,9 @@ router.get('/past-winners', async (req, res) => {
 // Add a manual past winner (creates contender and closed event)
 router.post('/past-winners', async (req, res) => {
     try {
-        console.log('🔧 DEBUG: Past Winners POST route called');
-        console.log('🔧 DEBUG: Request body:', req.body);
-        console.log('🔧 DEBUG: Request headers:', req.headers);
+        
+        
+        
         
         const { name, event_name, class: className, country, points, date, picture, video } = req.body;
         
@@ -731,11 +731,11 @@ router.post('/past-winners', async (req, res) => {
         });
 
         if (!name || !event_name) {
-            console.log('🔧 DEBUG: Missing required fields - name or event_name');
+            
             return res.status(400).json({ success: false, error: 'Name and event name are required' });
         }
 
-        console.log('🔧 DEBUG: Validation passed, creating contender and event...');
+        
         
         // First create contender
         const contenderData = {
@@ -748,7 +748,7 @@ router.post('/past-winners', async (req, res) => {
             created_by: req.admin?.email || 'admin@system.com'
         };
         
-        console.log('🔧 DEBUG: Contender data to insert:', contenderData);
+        
         console.log('🔧 DEBUG: Data types:', {
             name: typeof name,
             class: typeof (className || ''),
@@ -770,7 +770,7 @@ router.post('/past-winners', async (req, res) => {
             throw contenderError;
         }
 
-        console.log('🔧 DEBUG: Contender created:', contender);
+        
 
         // Then create the closed event with this contender as winner
         const { data: event, error: eventError } = await supabase
@@ -792,8 +792,8 @@ router.post('/past-winners', async (req, res) => {
             throw eventError;
         }
 
-        console.log('🔧 DEBUG: Event created:', event);
-        console.log('🔧 DEBUG: Sending success response');
+        
+        
 
         res.status(201).json({ 
             success: true, 
@@ -924,12 +924,12 @@ router.delete('/hall-of-fame/:id', async (req, res) => {
 // Upload Past Winner image to Supabase Storage
 router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), async (req, res) => {
     try {
-        console.log('🔧 DEBUG: Past Winners upload route called');
-        console.log('🔧 DEBUG: Request file:', req.file);
-        console.log('🔧 DEBUG: Request headers:', req.headers);
+        
+        
+        
         
         if (!req.file) {
-            console.log('🔧 DEBUG: No file provided');
+            
             return res.status(400).json({ success: false, error: 'No image file provided' });
         }
 
@@ -946,7 +946,7 @@ router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), as
         });
 
         // Upload to Supabase Storage
-        console.log('🔧 DEBUG: Starting upload to profiles bucket...');
+        
         const { data, error } = await supabase
             .storage
             .from('profiles')  // Use existing profile bucket
@@ -960,7 +960,7 @@ router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), as
             return res.status(500).json({ success: false, error: 'Failed to upload image' });
         }
 
-        console.log('🔧 DEBUG: Upload successful:', data);
+        
 
         // Get public URL
         const { data: { publicUrl } } = supabase
@@ -968,8 +968,8 @@ router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), as
             .from('profiles')  // Use existing profile bucket
             .getPublicUrl(fileName);
 
-        console.log('🔧 DEBUG: Public URL generated:', publicUrl);
-        console.log('🔧 DEBUG: Sending success response');
+        
+        
 
         res.json({ success: true, url: publicUrl });
     } catch (err) {
@@ -1078,7 +1078,7 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
         // Send email notification if email provided
         if (email && email.trim()) {
             try {
-                console.log(`📧 Attempting to send Hall of Fame notification to: ${email}`);
+                
                 console.log(`📧 Email details:`, {
                     player_name,
                     league,
@@ -1098,14 +1098,14 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
                     phone: phone || ''
                 });
                 
-                console.log(`✅ Hall of Fame notification sent successfully to ${email}`);
+                
             } catch (emailErr) {
                 console.error('❌ Failed to send Hall of Fame notification email:', emailErr);
                 console.error('❌ Email error details:', emailErr.message);
                 // Don't fail the request if email fails
             }
         } else {
-            console.log(`ℹ️ No email provided for Hall of Fame entry: ${player_name}`);
+            
         }
 
         res.status(201).json({
@@ -1306,18 +1306,18 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
 
 // Resend Contender Email
 router.post('/contenders/:id/resend-email', async (req, res) => {
-    console.log('🔧 DEBUG: Contender email resend route called');
-    console.log('🔧 DEBUG: Request params:', req.params);
-    console.log('🔧 DEBUG: Request headers:', req.headers);
+    
+    
+    
     
     try {
         const { id } = req.params;
         const token = req.headers.authorization?.replace('Bearer ', '');
         
-        console.log('🔧 DEBUG: Extracted token:', token ? 'present' : 'missing');
+        
         
         if (!token) {
-            console.log('❌ DEBUG: No token provided, returning 401');
+            
             return res.status(401).json({
                 success: false,
                 message: 'Authorization required'
@@ -1325,7 +1325,7 @@ router.post('/contenders/:id/resend-email', async (req, res) => {
         }
         
         // Get contender data
-        console.log('🔧 DEBUG: Fetching contender with ID:', id);
+        
         const { data: contender } = await supabase
             .from('contenders')
             .select('*')
@@ -1333,25 +1333,25 @@ router.post('/contenders/:id/resend-email', async (req, res) => {
             .single();
             
         if (!contender) {
-            console.log('❌ DEBUG: Contender not found in database');
+            
             return res.status(404).json({
                 success: false,
                 message: 'Contender not found'
             });
         }
         
-        console.log('🔧 DEBUG: Contender found:', contender);
-        console.log('🔧 DEBUG: Attempting to send email to:', contender.email);
+        
+        
         
         // Get event information for the email
-        console.log('🔧 DEBUG: Fetching event information for event ID:', contender.event_id);
+        
         const { data: event } = await supabase
             .from('events')
             .select('name')
             .eq('id', contender.event_id)
             .single();
             
-        console.log('🔧 DEBUG: Event found:', event);
+        
         
         // Send contender notification email with full event details
         await sendContenderNotification({
@@ -1362,7 +1362,7 @@ router.post('/contenders/:id/resend-email', async (req, res) => {
             country: contender.country || 'N/A'
         });
         
-        console.log('✅ DEBUG: Email sent successfully to:', contender.email);
+        
         
         res.json({
             success: true,
@@ -1382,18 +1382,18 @@ router.post('/contenders/:id/resend-email', async (req, res) => {
 
 // Resend Hall of Fame Email
 router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
-    console.log('🔧 DEBUG: Hall of Fame email resend route called');
-    console.log('🔧 DEBUG: Request params:', req.params);
-    console.log('🔧 DEBUG: Request headers:', req.headers);
+    
+    
+    
     
     try {
         const { id } = req.params;
         const token = req.headers.authorization?.replace('Bearer ', '');
         
-        console.log('🔧 DEBUG: Extracted token:', token ? 'present' : 'missing');
+        
         
         if (!token) {
-            console.log('❌ DEBUG: No token provided, returning 401');
+            
             return res.status(401).json({
                 success: false,
                 message: 'Authorization required'
@@ -1401,7 +1401,7 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
         }
         
         // Get Hall of Fame entry
-        console.log('🔧 DEBUG: Fetching Hall of Fame entry with ID:', id);
+        
         const { data: entry } = await supabase
             .from('hall_of_fame_web')
             .select('*')
@@ -1409,15 +1409,15 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
             .single();
             
         if (!entry) {
-            console.log('❌ DEBUG: Hall of Fame entry not found in database');
+            
             return res.status(404).json({
                 success: false,
                 message: 'Hall of Fame entry not found'
             });
         }
         
-        console.log('🔧 DEBUG: Hall of Fame entry found:', entry);
-        console.log('🔧 DEBUG: Attempting to send Hall of Fame email to:', entry.email);
+        
+        
         
         // Send Hall of Fame notification email
         await sendHallOfFameNotification({
@@ -1430,7 +1430,7 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
             phone: entry.phone || 'Not provided'
         });
         
-        console.log('✅ DEBUG: Hall of Fame email sent successfully to:', entry.email);
+        
         
         res.json({
             success: true,
