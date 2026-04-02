@@ -55,6 +55,56 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get active contender list for bot compatibility (only draft/open events)
+router.get('/list-all', async (req, res) => {
+  try {
+    // Find active events (draft or open)
+    const { data: activeEvents, error: eventsError } = await db
+      .from('events')
+      .select('id')
+      .or('status.eq.draft,status.eq.open');
+
+    if (eventsError) throw eventsError;
+
+    const eventIds = (activeEvents || []).map(e => e.id);
+
+    const { data: contenders, error: contendersError } = await db
+      .from('contenders')
+      .select('id, name, description, email, created_at, sent, event_id')
+      .in('event_id', eventIds)
+      .order('created_at', { ascending: false });
+
+    if (contendersError) throw contendersError;
+
+    const contendersWithTrophies = await Promise.all(
+      (contenders || []).map(async contender => {
+        const { count, error: trophyError } = await db
+          .from('hall_of_fame_web')
+          .select('*', { count: 'exact', head: true })
+          .eq('player_name', contender.name);
+
+        if (trophyError) {
+          console.error('Error counting trophies for contender:', contender.name, trophyError);
+          return { ...contender, trophies: 0 };
+        }
+
+        return { ...contender, trophies: count || 0 };
+      })
+    );
+
+    res.json({
+      success: true,
+      count: contendersWithTrophies.length,
+      data: contendersWithTrophies
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 // Get single contender by ID
 router.get('/:contenderId', async (req, res) => {
   try {
@@ -91,7 +141,7 @@ router.get('/:contenderId', async (req, res) => {
 // Create new contender (admin)
 router.post('/', verifyAdmin, async (req, res) => {
   try {
-    const { eventId, name, description, class: className, country } = req.body;
+    const { eventId, name, description, class: className, country, email, picture } = req.body;
     const adminUsername = req.user.username;
 
     if (!eventId) {
@@ -131,6 +181,9 @@ router.post('/', verifyAdmin, async (req, res) => {
         description: description || '',
         class: className || '',
         country: country || '',
+        email: email || null,
+        picture: picture || null,
+        sent: false,
         total_points: 0,
         created_by: adminUsername
       })
@@ -152,11 +205,11 @@ router.post('/', verifyAdmin, async (req, res) => {
   }
 });
 
-// Update contender (admin) - name, class, country, description, picture, video
+// Update contender (admin) - name, class, country, description, picture, video, email
 router.put('/:contenderId', verifyAdmin, async (req, res) => {
   try {
     const contenderId = req.params.contenderId;
-    const { name, description, class: className, country, picture, video } = req.body;
+    const { name, description, class: className, country, picture, video, email } = req.body;
 
     // Verify contender exists
     const { data: contender, error: getErr } = await db
@@ -177,6 +230,7 @@ router.put('/:contenderId', verifyAdmin, async (req, res) => {
     if (country !== undefined) updateData.country = country;
     if (picture !== undefined) updateData.picture = picture;
     if (video !== undefined) updateData.video = video;
+    if (email !== undefined) updateData.email = email;
 
     // Update contender
     const { data: updated, error: updErr } = await db

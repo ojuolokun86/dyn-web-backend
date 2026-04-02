@@ -38,12 +38,14 @@ const adminRoutes = require('./routes/admin');
 const eventsRoutes = require('./routes/events');
 const contendersRoutes = require('./routes/contenders');
 const votesRoutes = require('./routes/votes');
+const botRoutes = require('./routes/bot');
 
 // API Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/events', eventsRoutes);
 app.use('/api/contenders', contendersRoutes);
 app.use('/api/votes', votesRoutes);
+app.use('/api/bot', botRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {

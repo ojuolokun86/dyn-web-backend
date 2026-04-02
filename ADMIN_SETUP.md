@@ -130,6 +130,13 @@ ALTER TABLE contenders ADD COLUMN total_points INT DEFAULT 0;
 CREATE INDEX idx_contenders_event ON contenders(event_id);
 ```
 
+#### Update contenders table (add sent field for WhatsApp bot)
+```sql
+ALTER TABLE contenders ADD COLUMN IF NOT EXISTS sent BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_contenders_sent ON contenders(sent);
+```
+
 #### Create vote_tables table (for 1, 2, or 3 voting tables per event)
 ```sql
 CREATE TABLE vote_tables (
@@ -193,6 +200,28 @@ CREATE TABLE contender_point_records (
 CREATE INDEX idx_contender_point_records_contender ON contender_point_records(contender_id);
 CREATE INDEX idx_contender_point_records_event ON contender_point_records(event_id);
 CREATE INDEX idx_contender_point_records_point_table ON contender_point_records(point_table_id);
+```
+
+#### Create hall_of_fame_web table (for web hall of fame entries)
+```sql
+CREATE TABLE hall_of_fame_web (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  player_name TEXT NOT NULL,
+  league TEXT NOT NULL,
+  team_name TEXT NOT NULL,
+  season TEXT NOT NULL,
+  team_logo TEXT,
+  player_image TEXT,
+  email TEXT,
+  phone TEXT,
+  achievement_count INTEGER DEFAULT 1,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_hall_of_fame_web_player_name ON hall_of_fame_web(player_name);
+CREATE INDEX idx_hall_of_fame_web_league ON hall_of_fame_web(league);
+CREATE INDEX idx_hall_of_fame_web_season ON hall_of_fame_web(season);
 ```
 
 #### Migrations (alter existing tables to support fractional points)
