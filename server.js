@@ -7,6 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
+app.disable('x-powered-by'); // Hide Express signature for security
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -17,7 +18,8 @@ const DYNAMIC_EFOOTBALL_COMMUNITY_origins = [
   'http://localhost:5000', // optional
   'http://127.0.0.1:8080',
   'http://127.0.0.1:59135',
-  'https://dynamicfootball.netlify.app'
+  'https://dynamicfootball.netlify.app',
+  'http://192.168.137.1:8080'
 ];
 
 app.use(cors({
@@ -35,11 +37,13 @@ app.use(cors({
 const adminRoutes = require('./routes/admin');
 const eventsRoutes = require('./routes/events');
 const contendersRoutes = require('./routes/contenders');
+const votesRoutes = require('./routes/votes');
 
 // API Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/events', eventsRoutes);
 app.use('/api/contenders', contendersRoutes);
+app.use('/api/votes', votesRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -73,7 +77,6 @@ app.use((req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
     res.status(500).json({
         success: false,
         message: 'Internal server error',
@@ -83,14 +86,6 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-
-
-
-
-
-
-
-
 });
-
+console.log(`Server is running on port ${PORT}`);   
 module.exports = app;

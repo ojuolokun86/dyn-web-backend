@@ -9,7 +9,6 @@ const verifyAdmin = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) {
-      console.warn('⚠️ verifyAdmin: missing token for request', req.method, req.originalUrl);
       return res.status(401).json({
         success: false,
         error: 'No token provided'
@@ -20,7 +19,6 @@ const verifyAdmin = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (err) {
-    console.warn('⚠️ verifyAdmin: token verify failed', err.message);
     res.status(401).json({
       success: false,
       error: 'Invalid or expired token'
@@ -39,7 +37,6 @@ router.get('/all-contenders', async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (eventsError) {
-      console.error('❌ Error fetching events:', eventsError);
       throw eventsError;
     }
 
@@ -63,7 +60,6 @@ router.get('/all-contenders', async (req, res) => {
         .order('total_points', { ascending: false });
 
       if (contendersError) {
-        console.error(`❌ Error fetching contenders for event ${event.id}:`, contendersError);
         continue;
       }
 
@@ -86,7 +82,6 @@ router.get('/all-contenders', async (req, res) => {
       data: allContendersWithEvents
     });
   } catch (err) {
-    console.error('❌ Error in /events/all-contenders:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -112,7 +107,6 @@ router.get('/with-contenders', async (req, res) => {
 
 
     if (error && error.code !== 'PGRST116') {
-      console.error('❌ Database error:', error);
       throw error;
     }
 
@@ -129,7 +123,6 @@ router.get('/with-contenders', async (req, res) => {
       data
     });
   } catch (err) {
-    console.error('❌ Error in /events/with-contenders:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -151,7 +144,6 @@ router.get('/current', async (req, res) => {
 
 
     if (error && error.code !== 'PGRST116') {
-      console.error('❌ Database error:', error);
       throw error;
     }
 
@@ -168,7 +160,66 @@ router.get('/current', async (req, res) => {
       data
     });
   } catch (err) {
-    console.error('❌ Error in /events/current:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// Get current event with draft or open status (public endpoint)
+router.get('/current-draft-or-open', async (req, res) => {
+  try {
+    // Get the most recent event with status 'draft' or 'open'
+    const { data: event, error } = await db
+      .from('events')
+      .select('*')
+      .or('status.eq.draft,status.eq.open')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      throw error;
+    }
+
+    if (!event) {
+      return res.json({
+        success: true,
+        data: null,
+        message: 'No draft or open event found'
+      });
+    }
+
+    // Fetch contenders for this event
+    const { data: contenders, error: contError } = await db
+      .from('contenders')
+      .select('*')
+      .eq('event_id', event.id);
+
+    if (contError) {
+      throw contError;
+    }
+
+    event.contenders = contenders || [];
+
+    // Fetch vote tables for this event
+    const { data: voteTables, error: vtError } = await db
+      .from('vote_tables')
+      .select('*')
+      .eq('event_id', event.id);
+
+    if (vtError) {
+      throw vtError;
+    }
+
+    event.vote_tables = voteTables || [];
+
+    res.json({
+      success: true,
+      data: event
+    });
+  } catch (err) {
     res.status(500).json({
       success: false,
       error: err.message
@@ -201,7 +252,6 @@ router.get('/home', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error in /events/home:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to load events'
@@ -218,7 +268,6 @@ router.get('/', verifyAdmin, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Events query error:', error);
       throw error;
     }
 
@@ -227,7 +276,6 @@ router.get('/', verifyAdmin, async (req, res) => {
       data
     });
   } catch (err) {
-    console.error('Events GET error:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -246,7 +294,6 @@ router.get('/past-winners', async (req, res) => {
 
     
     if (eventsErr) {
-      //console.error('Events query error:', eventsErr);
       throw eventsErr;
     }
 
@@ -431,7 +478,6 @@ router.put('/:id/open', verifyAdmin, async (req, res) => {
       .single();
 
     if (error) {
-      console.error('Error opening event:', error);
       throw error;
     }
 
@@ -441,7 +487,6 @@ router.put('/:id/open', verifyAdmin, async (req, res) => {
       data
     });
   } catch (error) {
-    console.error('Error in open event:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -534,7 +579,6 @@ router.put('/:id/close-to-draft', verifyAdmin, async (req, res) => {
       data
     });
   } catch (err) {
-    console.error('Close event back to draft error:', err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -716,7 +760,7 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
     
 
     if (existingError) {
-      console.error('🔧 DEBUG: Error checking existing tables:', existingError);
+    if (existingError) {
     } else if (existingTables && existingTables.length > 0) {
       
       return res.json({
@@ -745,7 +789,7 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       message: 'Vote tables created successfully',
       data
     });
-  } catch (err) {
+  }} catch (err) {
     res.status(500).json({
       success: false,
       error: err.message
@@ -837,7 +881,6 @@ router.post('/:id/contenders', verifyAdmin, async (req, res) => {
           country: country || 'N/A'
         });
       } catch (emailErr) {
-        console.error('Failed to send contender notification email:', emailErr);
         // Don't fail the request if email fails
       }
     }
@@ -874,7 +917,6 @@ router.get('/:id/contenders', async (req, res) => {
       data: data || []
     });
   } catch (err) {
-    console.error(`❌ Error fetching contenders for event ${req.params.id}:`, err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -1524,7 +1566,6 @@ router.post('/:id/vote', async (req, res) => {
     
 
     if (voteError) {
-      console.error('🔧 DEBUG: Vote record creation error:', voteError);
       throw voteError;
     }
 
@@ -1532,11 +1573,6 @@ router.post('/:id/vote', async (req, res) => {
 
     // Update contender's total points
     const newTotalPoints = (contender.total_points || 0) + voteTable.points_per_vote;
-    console.log('🔧 DEBUG: Updating contender points:', {
-      current: contender.total_points,
-      adding: voteTable.points_per_vote,
-      new: newTotalPoints
-    });
 
     const { error: updateError } = await db
       .from('contenders')
@@ -1546,7 +1582,6 @@ router.post('/:id/vote', async (req, res) => {
     
 
     if (updateError) {
-      console.error('🔧 DEBUG: Points update error:', updateError);
       throw updateError;
     }
 
@@ -1563,8 +1598,6 @@ router.post('/:id/vote', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('🔧 DEBUG: Vote submission error:', err);
-    console.error('🔧 DEBUG: Error stack:', err.stack);
     res.status(500).json({
       success: false,
       error: err.message

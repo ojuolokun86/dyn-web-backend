@@ -111,7 +111,6 @@ async function sendHallOfFameNotification(hallOfFameData) {
         await transporter.sendMail(mailOptions);
         
     } catch (error) {
-        console.error('Failed to send email:', error);
         throw error;
     }
 }
@@ -170,7 +169,6 @@ async function sendRegistrationToSuperAdmin(registrationData) {
         
         return true;
     } catch (error) {
-        console.error('❌ Error sending registration email:', error);
         return false;
     }
 }
@@ -204,7 +202,6 @@ async function sendApprovalEmail(userData) {
         
         return true;
     } catch (error) {
-        console.error('❌ Error sending approval email:', error);
         return false;
     }
 }
@@ -244,7 +241,6 @@ async function sendRejectionEmail(userData) {
         
         return true;
     } catch (error) {
-        console.error('❌ Error sending rejection email:', error);
         return false;
     }
 }
@@ -302,7 +298,6 @@ async function sendContenderNotification(contenderData) {
         
         return true;
     } catch (error) {
-        console.error('❌ Error sending contender notification email:', error);
         return false;
     }
 }

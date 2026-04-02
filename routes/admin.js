@@ -88,7 +88,6 @@ router.post('/register', async (req, res) => {
             .select();
 
         if (error) {
-            console.error('Database error:', error);
             return res.status(500).json({
                 success: false,
                 message: 'Error creating registration request'
@@ -117,7 +116,6 @@ router.post('/register', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Registration error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error during registration'
@@ -188,7 +186,6 @@ router.post('/approve', verifySuperAdmin, async (req, res) => {
                     .select();
                 adminData = insertResult.data;
             } catch (adminError) {
-                console.error('Admin insert error:', adminError);
                 // Attempt to recover if admin already exists (unique constraint)
                 try {
                     const { data: existingAdmin } = await supabase
@@ -213,11 +210,9 @@ router.post('/approve', verifySuperAdmin, async (req, res) => {
                         adminData = updatedAdmin;
                       //  
                     } else {
-                        console.error('Admin creation failed and no existing admin found');
                         return res.status(500).json({ success: false, message: 'Error creating admin account' });
                     }
                 } catch (recoverErr) {
-                    console.error('Error recovering from admin insert failure:', recoverErr);
                     return res.status(500).json({ success: false, message: 'Error creating admin account' });
                 }
             }
@@ -271,7 +266,6 @@ router.post('/approve', verifySuperAdmin, async (req, res) => {
         }
 
     } catch (error) {
-        console.error('Approval error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error during approval'
@@ -299,7 +293,6 @@ router.post('/login', async (req, res) => {
             .single();
 
         if (error || !admin) {
-            console.warn('Admin not found in DB, checking for pending registration and superadmin env credentials');
             // If there is a pending registration request for this username/email, inform the user their application is under review
             try {
                 const { data: pendingReq } = await supabase
@@ -318,7 +311,6 @@ router.post('/login', async (req, res) => {
                 }
             } catch (rqErr) {
                 // ignore and continue to superadmin env fallback
-                console.warn('Error checking pending admin_requests:', rqErr.message || rqErr);
             }
 
             // If admin is not found in DB, allow superadmin fallback via env vars
@@ -383,7 +375,6 @@ router.post('/login', async (req, res) => {
                     }
                 });
             }
-            console.warn('Login failed: Admin not found');
             return res.status(401).json({
                 success: false,
                 message: 'Invalid username or password'
@@ -434,7 +425,6 @@ router.post('/login', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Login error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error during login'
@@ -472,7 +462,6 @@ router.get('/pending-requests', verifySuperAdmin, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error fetching requests:', error);
         res.status(500).json({
             success: false,
             message: 'Server error'
@@ -600,7 +589,6 @@ router.get('/approve-via-email', async (req, res) => {
                     .select();
                 adminData = insertResult.data;
             } catch (adminError) {
-                console.error('Admin insert error (email link):', adminError);
                 // Attempt recovery for existing admin
                 try {
                     const { data: existingAdmin } = await supabase
@@ -625,11 +613,9 @@ router.get('/approve-via-email', async (req, res) => {
                         adminData = updatedAdmin;
                         
                     } else {
-                        console.error('Admin creation failed (email link) and no existing admin found');
                         return res.status(500).json({ success: false, message: 'Error creating admin account' });
                     }
                 } catch (recoverErr) {
-                    console.error('Error recovering from admin insert failure (email link):', recoverErr);
                     return res.status(500).json({ success: false, message: 'Error creating admin account' });
                 }
             }
@@ -660,7 +646,6 @@ router.get('/approve-via-email', async (req, res) => {
         return res.send(`<html><body><h2>Request Rejected</h2><p>User ${request.username} has been rejected.</p></body></html>`);
 
     } catch (err) {
-        console.error('Email-approval error:', err);
         return res.status(400).send(`<html><body><h2>Invalid or expired token</h2><p>${err.message}</p></body></html>`);
     }
 });
@@ -718,17 +703,6 @@ router.post('/past-winners', async (req, res) => {
         
         
         const { name, event_name, class: className, country, points, date, picture, video } = req.body;
-        
-        console.log('🔧 DEBUG: Extracted data:', {
-            name,
-            event_name,
-            className,
-            country,
-            points,
-            date,
-            picture: picture ? 'URL provided' : 'No URL',
-            video
-        });
 
         if (!name || !event_name) {
             
@@ -749,16 +723,6 @@ router.post('/past-winners', async (req, res) => {
         };
         
         
-        console.log('🔧 DEBUG: Data types:', {
-            name: typeof name,
-            class: typeof (className || ''),
-            country: typeof (country || ''),
-            total_points: typeof parseInt(points),
-            picture: typeof (picture || ''),
-            video: typeof (video || ''),
-            created_by: typeof (req.admin?.email || 'admin@system.com')
-        });
-        
         const { data: contender, error: contenderError } = await supabase
             .from('contenders')
             .insert(contenderData)
@@ -766,7 +730,6 @@ router.post('/past-winners', async (req, res) => {
             .single();
 
         if (contenderError) {
-            console.error('🔧 DEBUG: Contender creation error:', contenderError);
             throw contenderError;
         }
 
@@ -788,7 +751,6 @@ router.post('/past-winners', async (req, res) => {
             .single();
 
         if (eventError) {
-            console.error('🔧 DEBUG: Event creation error:', eventError);
             throw eventError;
         }
 
@@ -804,8 +766,6 @@ router.post('/past-winners', async (req, res) => {
             }
         });
     } catch (err) {
-        console.error('🔧 DEBUG: Error in Past Winners POST route:', err);
-        console.error('🔧 DEBUG: Error stack:', err.stack);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -936,14 +896,6 @@ router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), as
         const file = req.file;
         const fileExt = file.originalname.split('.').pop();
         const fileName = `past-winner_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-        
-        console.log('🔧 DEBUG: File details:', {
-            originalname: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size,
-            extension: fileExt,
-            generatedFileName: fileName
-        });
 
         // Upload to Supabase Storage
         
@@ -956,7 +908,6 @@ router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), as
             });
 
         if (error) {
-            console.error('🔧 DEBUG: Supabase storage error:', error);
             return res.status(500).json({ success: false, error: 'Failed to upload image' });
         }
 
@@ -973,8 +924,6 @@ router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), as
 
         res.json({ success: true, url: publicUrl });
     } catch (err) {
-        console.error('🔧 DEBUG: Upload error:', err);
-        console.error('🔧 DEBUG: Error stack:', err.stack);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1079,15 +1028,6 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
         if (email && email.trim()) {
             try {
                 
-                console.log(`📧 Email details:`, {
-                    player_name,
-                    league,
-                    team_name,
-                    season,
-                    achievement_count: achievementCount,
-                    phone: phone || 'Not provided'
-                });
-                
                 await sendHallOfFameNotification({
                     player_name,
                     email,
@@ -1100,8 +1040,6 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
                 
                 
             } catch (emailErr) {
-                console.error('❌ Failed to send Hall of Fame notification email:', emailErr);
-                console.error('❌ Email error details:', emailErr.message);
                 // Don't fail the request if email fails
             }
         } else {
@@ -1141,7 +1079,6 @@ router.get('/hall-of-fame-web/:id', async (req, res) => {
             data: data 
         });
     } catch (err) {
-        console.error('Error in Hall of Fame GET route:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1174,7 +1111,6 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
                 });
 
             if (uploadError) {
-                console.error('Supabase storage error for player image:', uploadError);
                 return res.status(500).json({ success: false, error: 'Failed to upload player image' });
             }
 
@@ -1203,7 +1139,6 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
                 });
 
             if (uploadError) {
-                console.error('Supabase storage error for team logo:', uploadError);
                 return res.status(500).json({ success: false, error: 'Failed to upload team logo' });
             }
 
@@ -1234,7 +1169,6 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
             .single();
 
         if (error) {
-            console.error('Supabase update error:', error);
             return res.status(500).json({ success: false, error: error.message });
         }
 
@@ -1245,7 +1179,6 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
         });
         
     } catch (err) {
-        console.error('Error in Hall of Fame PUT route:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1287,7 +1220,6 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
             });
 
         if (error) {
-            console.error('Supabase storage error:', error);
             return res.status(500).json({ success: false, error: 'Failed to upload image' });
         }
 
@@ -1299,7 +1231,6 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
 
         res.json({ success: true, url: publicUrl });
     } catch (err) {
-        console.error('Upload error:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1371,7 +1302,6 @@ router.post('/contenders/:id/resend-email', async (req, res) => {
         });
         
     } catch (err) {
-        console.error('❌ DEBUG: Error in contender email resend route:', err);
         res.status(500).json({
             success: false,
             message: 'Failed to resend contender email',
@@ -1439,7 +1369,6 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
         });
         
     } catch (err) {
-        console.error('❌ DEBUG: Failed to send Hall of Fame email:', err);
         res.status(500).json({
             success: false,
             message: 'Failed to resend Hall of Fame email',
