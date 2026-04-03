@@ -1328,6 +1328,42 @@ router.put('/:id/contenders/:contenderId', verifyAdmin, async (req, res) => {
 
     if (updErr) throw updErr;
 
+    // Notify bot if picture or video was updated (image now available)
+    if ((picture !== undefined && picture) || (video !== undefined && video)) {
+      try {
+        const botResponse = await fetch(`http://18.130.30.145:3000/contender/new`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contender: {
+              id: updated.id,
+              name: updated.name,
+              description: updated.description,
+              class: updated.class,
+              country: updated.country,
+              email: updated.email,
+              picture: updated.picture,
+              event_id: updated.event_id,
+              total_points: updated.total_points,
+              sent: updated.sent,
+              created_at: updated.created_at
+            }
+          })
+        });
+
+        if (botResponse.ok) {
+          console.log(`🤖 [BOT] Successfully notified bot about updated contender: ${updated.name}`);
+        } else {
+          console.warn(`⚠️ [BOT] Bot notification failed with status: ${botResponse.status}`);
+        }
+      } catch (botError) {
+        console.warn('⚠️ [BOT] Could not notify bot about updated contender:', botError.message);
+        // Don't fail the request if bot notification fails
+      }
+    }
+
     res.json({
       success: true,
       message: 'Contender updated successfully',
