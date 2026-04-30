@@ -953,6 +953,8 @@ router.get('/hall-of-fame-web', async (req, res) => {
                 leagueMap[entry.league][playerKey] = {
                     player_name: entry.player_name,
                     player_image: entry.player_image,
+                    email: entry.email,
+                    phone: entry.phone,
                     wins: []
                 };
             }
@@ -966,6 +968,22 @@ router.get('/hall-of-fame-web', async (req, res) => {
         });
 
         res.json({ success: true, data: leagueMap });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Get all Hall of Fame Web entries as flat list (for existing users dropdown)
+router.get('/hall-of-fame-web/list', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('hall_of_fame_web')
+            .select('*')
+            .order('player_name', { ascending: true });
+
+        if (error) throw error;
+
+        res.json({ success: true, data: data || [] });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

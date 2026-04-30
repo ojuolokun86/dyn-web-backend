@@ -704,33 +704,21 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 // Create vote tables for an event
 router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
   try {
-    
-    
-    
-    
     const { voteTables } = req.body;
     const eventId = req.params.id;
 
-    
-
     // Check if event is closed
     const eventCheck = await checkEventClosed(eventId);
-    
-    
     if (eventCheck.closed) {
-      
       return res.status(400).json({ success: false, error: eventCheck.error });
     }
 
     if (!voteTables || !Array.isArray(voteTables)) {
-      
       return res.status(400).json({
         success: false,
         error: 'voteTables array is required'
       });
     }
-
-    
 
     // Verify event exists
     const { data: event, error: eventError } = await db
@@ -739,17 +727,12 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       .eq('id', eventId)
       .single();
 
-    
-
     if (eventError || !event) {
-      
       return res.status(404).json({
         success: false,
         error: 'Event not found'
       });
     }
-
-    
 
     // Check existing vote tables for this event
     const { data: existingTables, error: existingError } = await db
@@ -757,20 +740,17 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       .select('table_number, points_per_vote')
       .eq('event_id', eventId);
 
-    
+    if (existingError) {
+      return res.status(500).json({ success: false, error: existingError.message || 'Error checking existing vote tables' });
+    }
 
-    if (existingError) {
-    if (existingError) {
-    } else if (existingTables && existingTables.length > 0) {
-      
+    if (existingTables && existingTables.length > 0) {
       return res.json({
         success: true,
         message: 'Vote tables already exist for this event',
         data: existingTables
       });
     }
-
-    
 
     // Create vote tables
     const { data, error } = await db
@@ -789,7 +769,7 @@ router.post('/:id/vote-tables', verifyAdmin, async (req, res) => {
       message: 'Vote tables created successfully',
       data
     });
-  }} catch (err) {
+  } catch (err) {
     res.status(500).json({
       success: false,
       error: err.message
