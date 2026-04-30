@@ -969,7 +969,8 @@ router.get('/hall-of-fame-web', async (req, res) => {
 
         res.json({ success: true, data: leagueMap });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        console.error('[admin /hall-of-fame-web] failed to load hall of fame web entries:', err);
+        res.status(500).json({ success: false, error: err.message || 'Failed to load hall of fame web entries' });
     }
 });
 

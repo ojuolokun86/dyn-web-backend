@@ -252,9 +252,10 @@ router.get('/home', async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[events /home] failed to load events:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to load events'
+      error: error.message || 'Failed to load events'
     });
   }
 });
@@ -344,7 +345,8 @@ router.get('/past-winners', async (req, res) => {
 
     res.json({ success: true, data: pastWinners });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('[events /past-winners] failed to load past winners:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to load past winners' });
   }
 });
 
@@ -1431,18 +1433,23 @@ router.delete('/:id/contenders/:contenderId', verifyAdmin, async (req, res) => {
 // ===== VOTING ENDPOINTS =====
 // Submit a vote for a contender
 router.post('/:id/vote', async (req, res) => {
+
   try {
+  
     
-    
-    
-    
-    
-    const { contenderId, voteTableId } = req.body;
+    const { contenderId, voteTableId, fingerprint } = req.body;
     const eventId = req.params.id;
-    const voterIp = req.ip || req.connection.remoteAddress;
-
     
-
+    // Get real client IP when behind proxy (check multiple headers for different proxy types)
+    let voterIp = req.ip || req.connection.remoteAddress;
+    if (req.headers['x-forwarded-for']) {
+      voterIp = req.headers['x-forwarded-for'].split(',')[0].trim();
+    } else if (req.headers['x-real-ip']) {
+      voterIp = req.headers['x-real-ip'];
+    } else if (req.headers['cf-connecting-ip']) {
+      voterIp = req.headers['cf-connecting-ip'];
+    }
+    
     // Validate input
     if (!contenderId || !voteTableId) {
       
@@ -1521,38 +1528,58 @@ router.post('/:id/vote', async (req, res) => {
 
     
 
-    // Check if this IP has already voted for this table in this event
-    const { data: existingVote, error: existingVoteError } = await db
+    // Check for duplicate vote - block ONLY if both voter_ip AND fingerprint match
+    // Allow multiple users on same IP if fingerprint is different
+    // Old records without fingerprint do not block new users
+    let duplicateQuery = db
       .from('contender_vote_records')
       .select('*')
       .eq('event_id', eventId)
       .eq('vote_table_id', voteTableId)
-      .eq('voter_ip', voterIp)
-      .single();
+      .eq('voter_ip', voterIp);
 
-    
+    // If fingerprint provided, add it to the check
+    if (fingerprint) {
+      duplicateQuery = duplicateQuery.eq('fingerprint', fingerprint);
+    } else {
+      // No fingerprint - only block if existing record also has no fingerprint
+      duplicateQuery = duplicateQuery.is('fingerprint', null);
+    }
 
-    if (!existingVoteError && existingVote) {
-      
+    const { data: existingVote, error: existingVoteError } = await duplicateQuery.limit(1);
+
+    if (existingVoteError) {
+      throw existingVoteError;
+    }
+
+    if (existingVote && existingVote.length > 0) {
       return res.status(400).json({
         success: false,
         error: 'You have already voted using this vote table'
       });
     }
 
-    // Check if this IP has already voted for this contender using any table
-    const { data: existingContenderVote, error: existingContenderVoteError } = await db
+    // Check if this user (IP + fingerprint combo) has already voted for this contender using any table
+    let contenderQuery = db
       .from('contender_vote_records')
       .select('*')
       .eq('event_id', eventId)
       .eq('contender_id', contenderId)
-      .eq('voter_ip', voterIp)
-      .single();
+      .eq('voter_ip', voterIp);
 
-    
+    if (fingerprint) {
+      contenderQuery = contenderQuery.eq('fingerprint', fingerprint);
+    } else {
+      contenderQuery = contenderQuery.is('fingerprint', null);
+    }
 
-    if (!existingContenderVoteError && existingContenderVote) {
-      
+    const { data: existingContenderVote, error: existingContenderVoteError } = await contenderQuery.limit(1);
+
+    if (existingContenderVoteError) {
+      throw existingContenderVoteError;
+    }
+
+    if (existingContenderVote && existingContenderVote.length > 0) {
       return res.status(400).json({
         success: false,
         error: 'You have already voted for this contender. You must vote for different contenders using different vote tables.'
@@ -1568,6 +1595,7 @@ router.post('/:id/vote', async (req, res) => {
       vote_table_id: voteTableId,
       points_awarded: voteTable.points_per_vote,
       voter_ip: voterIp,
+      fingerprint: fingerprint || null,
       voted_at: new Date().toISOString()
     };
 
