@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const supabase = require('../config/db');
 const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail, sendHallOfFameNotification, testEmailConfiguration, sendContenderNotification } = require('../services/email-service');
 const { isValidEmail, isValidPassword, isValidUsername, hashPassword, comparePassword } = require('../utils/validation');
+const { countPlayerInductions } = require('../utils/hall-of-fame');
 const { uploadImage } = require('../config/multer-images');
 
 const router = express.Router();
@@ -1014,16 +1015,6 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
             });
         }
 
-        // Check how many times this player has been in Hall of Fame
-        const { data: existingEntries, error: countError } = await supabase
-            .from('hall_of_fame_web')
-            .select('id')
-            .eq('player_name', player_name);
-
-        if (countError) throw countError;
-
-        const achievementCount = (existingEntries?.length || 0) + 1; // Include this new entry
-
         const { data, error } = await supabase
             .from('hall_of_fame_web')
             .insert([{
@@ -1035,13 +1026,34 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
                 player_image,
                 email: email || '',
                 phone: phone || '',
-                achievement_count: achievementCount,
                 created_at: new Date().toISOString()
             }])
             .select()
             .single();
 
         if (error) throw error;
+
+        // Count the player's full induction history (this new entry included)
+        let entry = data;
+        let achievementCount = 1;
+        try {
+            achievementCount = await countPlayerInductions(supabase, player_name);
+
+            if (entry.achievement_count !== achievementCount) {
+                const { data: updatedEntry, error: countUpdateError } = await supabase
+                    .from('hall_of_fame_web')
+                    .update({ achievement_count: achievementCount })
+                    .eq('id', entry.id)
+                    .select()
+                    .single();
+
+                if (countUpdateError) throw countUpdateError;
+                entry = updatedEntry;
+            }
+        } catch (countErr) {
+            console.error('[admin /hall-of-fame-web] failed to compute achievement count:', countErr);
+            achievementCount = entry.achievement_count || 1;
+        }
 
         // Send email notification if email provided
         if (email && email.trim()) {
@@ -1068,7 +1080,7 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'Hall of Fame entry created successfully',
-            data
+            data: entry
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -1368,6 +1380,14 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
         
         
         
+        // Rank this induction within the player's full history
+        let achievementCount = entry.achievement_count || 1;
+        try {
+            achievementCount = await countPlayerInductions(supabase, entry.player_name, { upTo: entry });
+        } catch (countErr) {
+            console.error('[admin /hall-of-fame/:id/resend-email] failed to compute achievement count:', countErr);
+        }
+
         // Send Hall of Fame notification email
         await sendHallOfFameNotification({
             player_name: entry.player_name,
@@ -1375,7 +1395,7 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
             league: entry.league,
             team_name: entry.team_name,
             season: entry.season,
-            achievement_count: entry.trophies || 1,
+            achievement_count: achievementCount,
             phone: entry.phone || 'Not provided'
         });
         
