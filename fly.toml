@@ -1,22 +1,15 @@
-# fly.toml app configuration file generated for dyn-server on 2026-04-30T10:47:48+01:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
-app = 'dyn-server'
-primary_region = 'lhr'
-
-[build]
+app = "dyn-server"
+primary_region = "lhr"
 
 [http_service]
-  internal_port = 5000
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+auto_start_machines = true
+auto_stop_machines = true
+force_https = true
+internal_port = 5_000
+min_machines_running = 0
+processes = [ "app" ]
 
 [[vm]]
-  memory = '256mb'
-  cpus = 1
-  memory_mb = 256
+cpus = 1
+memory = "256mb"
+memory_mb = 256

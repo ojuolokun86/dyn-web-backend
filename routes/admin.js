@@ -7,6 +7,52 @@ const { uploadImage } = require('../config/multer-images');
 
 const router = express.Router();
 
+function normalizePlayerName(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function dedupeHallOfFameRecords(entries = []) {
+    const uniqueEntries = new Map();
+
+    for (const entry of entries) {
+        const playerName = normalizePlayerName(entry.player_name || entry.name || '');
+        const league = normalizePlayerName(entry.league || '');
+        const teamName = normalizePlayerName(entry.team_name || entry.team || '');
+        const season = normalizePlayerName(entry.season || '');
+        const recordKey = `${playerName}|${league}|${teamName}|${season}`;
+
+        if (!uniqueEntries.has(recordKey)) {
+            uniqueEntries.set(recordKey, entry);
+        }
+    }
+
+    return Array.from(uniqueEntries.values());
+}
+
+async function getHallOfFameAchievementCount(playerName) {
+    const normalizedPlayerName = normalizePlayerName(playerName);
+
+    const [webResult, legacyResult] = await Promise.all([
+        supabase.from('hall_of_fame_web').select('*'),
+        supabase.from('hall_of_fame').select('*')
+    ]);
+
+    if (webResult.error) throw webResult.error;
+    if (legacyResult.error) throw legacyResult.error;
+
+    const allHistory = [
+        ...(webResult.data || []).map(entry => ({ ...entry, source: 'hall_of_fame_web' })),
+        ...(legacyResult.data || []).map(entry => ({ ...entry, source: 'hall_of_fame' }))
+    ];
+
+    const matchingHistory = allHistory.filter(entry => {
+        const entryPlayerName = normalizePlayerName(entry.player_name || entry.name || '');
+        return entryPlayerName === normalizedPlayerName;
+    });
+
+    return dedupeHallOfFameRecords(matchingHistory).length;
+}
+
 // ===== ADMIN REGISTRATION =====
 router.post('/register', async (req, res) => {
     try {
@@ -770,6 +816,73 @@ router.post('/past-winners', async (req, res) => {
     }
 });
 
+// ===== TEAM SEARCH (TheSportsDB Integration) =====
+/**
+ * Search for a football team and fetch its logo from TheSportsDB API
+ * The logo is then cached in Supabase Storage
+ */
+router.get('/search-team', async (req, res) => {
+    try {
+        const { teamName } = req.query;
+
+        if (!teamName || teamName.trim().length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Team name is required'
+            });
+        }
+
+        console.log(`[/search-team] Searching for team: ${teamName}`);
+
+        // Fetch from TheSportsDB API
+        const apiUrl = `https://www.thesportsdb.com/api/v1/json/123/searchteams.php?t=${encodeURIComponent(teamName)}`;
+        
+        const response = await fetch(apiUrl, {
+            timeout: 5000 // 5 second timeout
+        });
+
+        if (!response.ok) {
+            return res.status(response.status).json({
+                success: false,
+                error: `TheSportsDB API error: ${response.status}`
+            });
+        }
+
+        const data = await response.json();
+
+        if (!data.results || data.results.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Team not found'
+            });
+        }
+
+        // Use the first result
+        const team = data.results[0];
+
+        const teamInfo = {
+            name: team.strTeam || teamName,
+            logo: team.strTeamBadge || null,
+            country: team.strCountry || null,
+            founded: team.intFormedYear || null
+        };
+
+        console.log(`[/search-team] Found team: ${teamInfo.name}`);
+
+        res.json({
+            success: true,
+            data: teamInfo
+        });
+
+    } catch (error) {
+        console.error('[/search-team] Error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Error searching for team'
+        });
+    }
+});
+
 // ===== HALL OF FAME MANAGEMENT =====
 // Get all Hall of Fame entries (matching bot structure)
 router.get('/hall-of-fame', async (req, res) => {
@@ -1014,15 +1127,8 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
             });
         }
 
-        // Check how many times this player has been in Hall of Fame
-        const { data: existingEntries, error: countError } = await supabase
-            .from('hall_of_fame_web')
-            .select('id')
-            .eq('player_name', player_name);
-
-        if (countError) throw countError;
-
-        const achievementCount = (existingEntries?.length || 0) + 1; // Include this new entry
+        const previousAchievements = await getHallOfFameAchievementCount(player_name);
+        const achievementCount = previousAchievements + 1;
 
         const { data, error } = await supabase
             .from('hall_of_fame_web')
@@ -1054,7 +1160,8 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
                     team_name,
                     season,
                     achievement_count: achievementCount,
-                    phone: phone || ''
+                    phone: phone || '',
+                    team_logo: team_logo || ''
                 });
                 
                 
@@ -1256,10 +1363,7 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
 
 // Resend Contender Email
 router.post('/contenders/:id/resend-email', async (req, res) => {
-    
-    
-    
-    
+    console.log('Resending contender email');
     try {
         const { id } = req.params;
         const token = req.headers.authorization?.replace('Bearer ', '');
@@ -1313,7 +1417,7 @@ router.post('/contenders/:id/resend-email', async (req, res) => {
         });
         
         
-        
+        console.log('Contender email sent successfully');
         res.json({
             success: true,
             message: 'Contender email sent successfully',
@@ -1368,15 +1472,17 @@ router.post('/hall-of-fame/:id/resend-email', async (req, res) => {
         
         
         
-        // Send Hall of Fame notification email
+        const totalAchievementCount = (await getHallOfFameAchievementCount(entry.player_name)) + 1;
+
         await sendHallOfFameNotification({
             player_name: entry.player_name,
             email: entry.email,
             league: entry.league,
             team_name: entry.team_name,
             season: entry.season,
-            achievement_count: entry.trophies || 1,
-            phone: entry.phone || 'Not provided'
+            achievement_count: totalAchievementCount,
+            phone: entry.phone || 'Not provided',
+            team_logo: entry.team_logo || ''
         });
         
         

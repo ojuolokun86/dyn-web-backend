@@ -241,7 +241,16 @@ router.get('/home', async (req, res) => {
     let bannerEvent = null;
     if (events && events.length) {
       upcoming = events.find(e => e.status === 'open') || events.find(e => e.status === 'draft') || null;
-      bannerEvent = events.find(e => e.status === 'winner_announced') || null;
+
+      const winnerEvents = events
+        .filter(e => e.status === 'winner_announced')
+        .sort((a, b) => {
+          const aDate = new Date(a.ended_at || a.updated_at || a.created_at || 0).getTime();
+          const bDate = new Date(b.ended_at || b.updated_at || b.created_at || 0).getTime();
+          return bDate - aDate;
+        });
+
+      bannerEvent = winnerEvents[0] || null;
     }
 
     res.json({

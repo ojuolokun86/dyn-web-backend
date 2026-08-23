@@ -59,10 +59,24 @@ async function testEmailConfiguration() {
     }
 }
 
+function getSafeTeamLogoUrl(teamLogo) {
+    const value = String(teamLogo || '').trim();
+    if (!value) return '';
+    if (!/^https:\/\//i.test(value)) return '';
+    if (value.includes('localhost') || value.includes('127.0.0.1') || value.includes('file:')) return '';
+    return value;
+}
+
 // Send Hall of Fame notification email
 async function sendHallOfFameNotification(hallOfFameData) {
     
-    const { player_name, email, league, team_name, season, achievement_count, phone } = hallOfFameData;
+    const { player_name, email, league, team_name, season, achievement_count, phone, team_logo } = hallOfFameData;
+    const safeTeamLogo = getSafeTeamLogoUrl(team_logo);
+    const teamImageHtml = safeTeamLogo ? `
+        <div style="margin: 20px 0 10px 0; text-align: center;">
+            <img src="${safeTeamLogo}" alt="${(team_name || 'Winning Team')} - Hall of Fame Winning Team" style="max-width: 140px; max-height: 140px; object-fit: contain; border-radius: 12px; background: #f4f4f4; padding: 12px; border: 1px solid #e2e8f0;" />
+        </div>
+    ` : '';
     
     const mailOptions = {
         from: process.env.EMAIL_USER,
@@ -77,6 +91,8 @@ async function sendHallOfFameNotification(hallOfFameData) {
                         <h2 style="margin: 0 0 10px 0; font-size: 24px;">Congratulations, ${player_name}!</h2>
                         <p style="margin: 0; font-size: 18px;">You have been officially inducted into the Hall of Fame</p>
                     </div>
+
+                    ${teamImageHtml}
 
                     <div style="text-align: left; background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
                         <h3 style="color: #667eea; margin-top: 0;">📋 Achievement Details:</h3>
@@ -109,8 +125,10 @@ async function sendHallOfFameNotification(hallOfFameData) {
 
     try {
         await transporter.sendMail(mailOptions);
+        console.log('Hall of Fame email sent successfully');
         
     } catch (error) {
+        console.error('Error sending Hall of Fame email:', error);
         throw error;
     }
 }
@@ -129,7 +147,11 @@ function getOrdinalSuffix(num) {
 async function sendRegistrationToSuperAdmin(registrationData) {
     const { fullName, email, username, id } = registrationData;
     const superSecret = process.env.SUPER_JWT_SECRET || 'super_admin_hardcore_secret_key_2026';
-    const backendHost = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const backendHost = (process.env.BACKEND_URL || process.env.ACKEND_URL || '').replace(/\/+$/, '');
+
+    if (!backendHost) {
+        throw new Error('BACKEND_URL or ACKEND_URL must be configured in the environment before sending admin approval emails.');
+    }
 
     // Generate one-click approve/reject tokens
     const approveToken = jwt.sign({ requestId: id, action: 'approve', email: process.env.SUPERADMIN_EMAIL }, superSecret, { expiresIn: '7d' });
@@ -166,9 +188,11 @@ async function sendRegistrationToSuperAdmin(registrationData) {
 
     try {
         await transporter.sendMail(mailOptions);
+        console.log('Admin registration email sent successfully');
         
         return true;
     } catch (error) {
+        console.error('Error sending admin registration email:', error);
         return false;
     }
 }
@@ -176,6 +200,8 @@ async function sendRegistrationToSuperAdmin(registrationData) {
 // Send approval email to user
 async function sendApprovalEmail(userData) {
     const { fullName, email, username } = userData;
+    const adminFrontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+    const loginUrl = adminFrontendUrl ? `${adminFrontendUrl.replace(/\/api?$/, '')}/admin-login.html` : '';
     
     const mailOptions = {
         from: process.env.EMAIL_USER,
@@ -190,7 +216,7 @@ async function sendApprovalEmail(userData) {
             <p>You can now login to the admin dashboard with the username you provided during registration.</p>
             <p>If you forget your password, use the password reset flow to set a new one.</p>
 
-            <p><strong>Login URL:</strong> <a href="http://localhost:3000/admin-login.html">http://localhost:3000/admin-login.html</a></p>
+            <p><strong>Login URL:</strong> ${loginUrl ? `<a href="${loginUrl}">${loginUrl}</a>` : 'Configuration missing: set BACKEND_URL or ACKEND_URL'}</p>
 
             <p>If you have any questions, contact the superadmin.</p>
             <p>Best regards,<br>DYNAMIC EFOOTBALL COMMUNITY Team</p>
@@ -199,9 +225,11 @@ async function sendApprovalEmail(userData) {
 
     try {
         await transporter.sendMail(mailOptions);
+        console.log('Approval email sent successfully');
         
         return true;
     } catch (error) {
+        console.error('Error sending approval email:', error);
         return false;
     }
 }
@@ -238,9 +266,11 @@ async function sendRejectionEmail(userData) {
 
     try {
         await transporter.sendMail(mailOptions);
+        console.log('Rejection email sent successfully');
         
         return true;
     } catch (error) {
+        console.error('Error sending rejection email:', error);
         return false;
     }
 }
@@ -295,9 +325,11 @@ async function sendContenderNotification(contenderData) {
 
     try {
         await transporter.sendMail(mailOptions);
+        console.log('Contender notification email sent successfully');
         
         return true;
     } catch (error) {
+        console.error('Error sending contender notification email:', error);
         return false;
     }
 }
