@@ -24,6 +24,23 @@ test('duplicate rapid searches are treated as the same request', () => {
   assert.equal(teamSearch.shouldSkipSearchRequest('Manchester United', 'Manchester City'), false);
 });
 
+test('debounced team search waits for a pause before firing', async () => {
+  let calls = 0;
+  const debounce = teamSearch.createDebouncedSearch(() => {
+    calls += 1;
+  }, 1000);
+
+  debounce('P');
+  debounce('Pa');
+  debounce('Par');
+
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(calls, 0);
+
+  await new Promise(resolve => setTimeout(resolve, 800));
+  assert.equal(calls, 1);
+});
+
 test('local frontend defaults to the local backend URL', () => {
   global.window = {
     location: { hostname: 'localhost', search: '' },

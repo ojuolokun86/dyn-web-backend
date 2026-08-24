@@ -863,7 +863,7 @@ router.get('/search-team', async (req, res) => {
 
         const teamInfo = {
             name: team.strTeam || teamName,
-            logo: team.strTeamBadge || null,
+            logo: team.strBadge || team.strLogo || team.strTeamBadge || team.strTeamBadge || null,
             country: team.strCountry || null,
             founded: team.intFormedYear || null
         };
