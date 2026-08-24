@@ -849,8 +849,9 @@ router.get('/search-team', async (req, res) => {
         }
 
         const data = await response.json();
+        const teams = Array.isArray(data?.teams) ? data.teams : Array.isArray(data?.results) ? data.results : [];
 
-        if (!data.results || data.results.length === 0) {
+        if (!teams.length) {
             return res.status(404).json({
                 success: false,
                 error: 'Team not found'
@@ -858,7 +859,7 @@ router.get('/search-team', async (req, res) => {
         }
 
         // Use the first result
-        const team = data.results[0];
+        const team = teams[0];
 
         const teamInfo = {
             name: team.strTeam || teamName,
@@ -1146,6 +1147,14 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
             }])
             .select()
             .single();
+
+        if (!error && data) {
+            const freshTotal = (await getHallOfFameAchievementCount(player_name)) + 1;
+            await supabase
+                .from('hall_of_fame_web')
+                .update({ achievement_count: freshTotal })
+                .eq('id', data.id);
+        }
 
         if (error) throw error;
 
