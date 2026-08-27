@@ -224,6 +224,36 @@ CREATE INDEX idx_hall_of_fame_web_league ON hall_of_fame_web(league);
 CREATE INDEX idx_hall_of_fame_web_season ON hall_of_fame_web(season);
 ```
 
+#### Add reusable contender profiles
+```sql
+CREATE TABLE contender_profiles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source_type TEXT NOT NULL,
+  source_id UUID,
+  name TEXT NOT NULL,
+  description TEXT,
+  class TEXT,
+  country TEXT,
+  email TEXT,
+  picture TEXT,
+  video TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (source_type, source_id)
+);
+
+ALTER TABLE contenders ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES contender_profiles(id);
+ALTER TABLE hall_of_fame_web ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES contender_profiles(id);
+
+CREATE INDEX IF NOT EXISTS idx_contender_profiles_name ON contender_profiles(name);
+CREATE INDEX IF NOT EXISTS idx_contender_profiles_email ON contender_profiles(email);
+CREATE INDEX IF NOT EXISTS idx_contenders_profile ON contenders(profile_id);
+```
+
+The profile is the reusable identity. Each event still gets its own contender row,
+so points and event-specific history remain independent.
+
 #### Migrations (alter existing tables to support fractional points)
 Run these in Supabase SQL editor if your tables already exist and you want to allow decimal points:
 ```sql

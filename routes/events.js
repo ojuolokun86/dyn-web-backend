@@ -269,6 +269,97 @@ router.get('/home', async (req, res) => {
   }
 });
 
+// Search reusable people for the admin contender form
+router.get('/contender-sources', verifyAdmin, async (req, res) => {
+  try {
+    const sourceType = req.query.type || 'all';
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const sources = [];
+
+    if (sourceType === 'all' || sourceType === 'previous') {
+      const { data: contenders, error } = await db
+        .from('contenders')
+        .select('id, profile_id, name, description, class, country, email, picture, video, created_at')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) throw error;
+
+      const seen = new Set();
+      (contenders || []).forEach(contender => {
+        const key = contender.profile_id || contender.id;
+        if (seen.has(key)) return;
+        seen.add(key);
+        sources.push({
+          source_type: 'previous',
+          source_id: contender.id,
+          profile_id: contender.profile_id || null,
+          name: contender.name,
+          description: contender.description || '',
+          class: contender.class || '',
+          country: contender.country || '',
+          email: contender.email || '',
+          picture: contender.picture || '',
+          video: contender.video || ''
+        });
+      });
+    }
+
+    if (sourceType === 'all' || sourceType === 'hall_of_fame') {
+      const { data: hallEntries, error } = await db
+        .from('hall_of_fame_web')
+        .select('id, profile_id, player_name, player_image, email, team_name, league, season')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) throw error;
+
+      (hallEntries || []).forEach(entry => sources.push({
+        source_type: 'hall_of_fame',
+        source_id: entry.id,
+        profile_id: entry.profile_id || null,
+        name: entry.player_name,
+        description: entry.team_name ? `Hall of Fame team: ${entry.team_name}` : '',
+        class: entry.league || '',
+        country: '',
+        email: entry.email || '',
+        picture: entry.player_image || '',
+        video: ''
+      }));
+    }
+
+    if (sourceType === 'all' || sourceType === 'user') {
+      const { data: users, error } = await db
+        .from('admins')
+        .select('id, full_name, email, created_at')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (error) throw error;
+
+      (users || []).forEach(user => sources.push({
+        source_type: 'user',
+        source_id: user.id,
+        profile_id: null,
+        name: user.full_name,
+        description: '',
+        class: '',
+        country: '',
+        email: user.email || '',
+        picture: '',
+        video: ''
+      }));
+    }
+
+    const filtered = search
+      ? sources.filter(source => [source.name, source.email, source.class, source.country]
+        .some(value => String(value || '').toLowerCase().includes(search)))
+      : sources;
+
+    res.json({ success: true, data: filtered });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Get all events (admin only)
 router.get('/', verifyAdmin, async (req, res) => {
   try {
@@ -293,7 +384,7 @@ router.get('/', verifyAdmin, async (req, res) => {
   }
 });
 
-// Get past winners (within 3 months)
+// Get all announced event winners
 router.get('/past-winners', async (req, res) => {
   try {
     const { data: events, error: eventsErr } = await db
@@ -315,40 +406,34 @@ router.get('/past-winners', async (req, res) => {
     
     // Get winner details for each event
     const pastWinners = [];
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
     for (const event of events) {
-      const eventDate = new Date(event.ended_at || event.updated_at);
-      
-      // Only include events from last 3 months
-      if (eventDate > threeMonthsAgo) {
-        // Get winner details
-        const { data: winner, error: winnerErr } = await db
-          .from('contenders')
-          .select('*')
-          .eq('id', event.winner_id)
-          .single();
+      if (!event.winner_id) {
+        continue;
+      }
 
+      // Keep every announced winner so the homepage slideshow and Hall of Fame
+      // remain a complete historical record.
+      const { data: winner, error: winnerErr } = await db
+        .from('contenders')
+        .select('*')
+        .eq('id', event.winner_id)
+        .single();
 
-        if (!winnerErr && winner) {
-          const winnerData = {
-            event_id: event.id,
-            event_name: event.name,
-            winner_id: event.winner_id,
-            winner_name: winner.name,
-            winner_class: winner.class,
-            winner_country: winner.country,
-            winner_picture: winner.picture || '',
-            winner_video: winner.video || '',
-            winner_points: winner.total_points || 0,
-            ended_at: event.ended_at,
-            updated_at: event.updated_at
-          };
-          pastWinners.push(winnerData);
-        } else {
-        }
-      } else {
+      if (!winnerErr && winner) {
+        pastWinners.push({
+          event_id: event.id,
+          event_name: event.name,
+          winner_id: event.winner_id,
+          winner_name: winner.name,
+          winner_class: winner.class,
+          winner_country: winner.country,
+          winner_picture: winner.picture || '',
+          winner_video: winner.video || '',
+          winner_points: winner.total_points || 0,
+          ended_at: event.ended_at,
+          updated_at: event.updated_at
+        });
       }
     }
 
@@ -809,7 +894,7 @@ const { sendContenderNotification } = require('../services/email-service');
 // Create contender for an event
 router.post('/:id/contenders', verifyAdmin, async (req, res) => {
   try {
-    const { name, description, class: className, country, email } = req.body;
+    const { name, description, class: className, country, email, profileId, sourceType, sourceId } = req.body;
     const eventId = req.params.id;
     const adminUsername = req.user.username;
 
@@ -843,16 +928,96 @@ router.post('/:id/contenders', verifyAdmin, async (req, res) => {
       });
     }
 
-    // Create contender
+    let profile;
+    if (profileId) {
+      const { data, error } = await db
+        .from('contender_profiles')
+        .select('*')
+        .eq('id', profileId)
+        .single();
+      if (error || !data) return res.status(404).json({ success: false, error: 'Reusable profile not found' });
+      profile = data;
+    } else if (sourceType && sourceId) {
+      const sourceTable = sourceType === 'hall_of_fame'
+        ? 'hall_of_fame_web'
+        : sourceType === 'user' ? 'admins' : 'contenders';
+      const { data: source, error: sourceError } = await db
+        .from(sourceTable)
+        .select('*')
+        .eq('id', sourceId)
+        .single();
+      if (sourceError || !source) return res.status(404).json({ success: false, error: 'Selected source record not found' });
+
+      let linkedProfileId = source.profile_id;
+      if (!linkedProfileId && sourceType === 'user') {
+        const { data: linkedProfile, error: linkedProfileError } = await db
+          .from('contender_profiles')
+          .select('id')
+          .eq('source_type', 'user')
+          .eq('source_id', sourceId)
+          .maybeSingle();
+        if (linkedProfileError) throw linkedProfileError;
+        linkedProfileId = linkedProfile?.id;
+      }
+
+      if (linkedProfileId) {
+        const { data, error } = await db.from('contender_profiles').select('*').eq('id', linkedProfileId).single();
+        if (error) throw error;
+        profile = data;
+      } else {
+        const profileData = {
+          source_type: sourceType,
+          source_id: sourceId,
+          name: sourceType === 'hall_of_fame' ? source.player_name : sourceType === 'user' ? source.full_name : source.name,
+          description: sourceType === 'hall_of_fame' ? (source.team_name ? `Hall of Fame team: ${source.team_name}` : '') : (source.description || ''),
+          class: sourceType === 'hall_of_fame' ? (source.league || '') : (source.class || ''),
+          country: source.country || '',
+          email: source.email || '',
+          picture: sourceType === 'hall_of_fame' ? (source.player_image || '') : (source.picture || ''),
+          video: source.video || '',
+          created_by: adminUsername
+        };
+        const { data, error } = await db.from('contender_profiles').insert(profileData).select().single();
+        if (error) throw error;
+        profile = data;
+        if (sourceType !== 'user') {
+          await db.from(sourceTable).update({ profile_id: profile.id }).eq('id', sourceId);
+        }
+      }
+    }
+
+    if (!profile) {
+      const { data, error } = await db.from('contender_profiles').insert({
+        source_type: 'new_user',
+        name: name.trim(),
+        description: description || '',
+        class: className || '',
+        country: country || '',
+        email: email || '',
+        created_by: adminUsername
+      }).select().single();
+      if (error) throw error;
+      profile = data;
+    }
+
+    const profileValues = profile;
+    if (!profileValues.name || !profileValues.name.trim()) {
+      return res.status(400).json({ success: false, error: 'Contender name is required' });
+    }
+
+    // Create an event-specific participation row linked to the reusable profile.
     const { data, error } = await db
       .from('contenders')
       .insert({
         event_id: eventId,
-        name: name.trim(),
-        email: email || '',
-        description: description || '',
-        class: className || '',
-        country: country || '',
+        profile_id: profile.id,
+        name: profileValues.name.trim(),
+        email: profileValues.email || '',
+        description: profileValues.description || '',
+        class: profileValues.class || '',
+        country: profileValues.country || '',
+        picture: profileValues.picture || null,
+        video: profileValues.video || null,
         total_points: 0,
         created_by: adminUsername
       })
@@ -862,14 +1027,14 @@ router.post('/:id/contenders', verifyAdmin, async (req, res) => {
     if (error) throw error;
 
     // Send email notification if email provided
-    if (email && email.trim()) {
+    if (profileValues.email && profileValues.email.trim()) {
       try {
         await sendContenderNotification({
-          name: name.trim(),
-          email: email.trim(),
+          name: profileValues.name.trim(),
+          email: profileValues.email.trim(),
           eventName: event.name,
-          class: className || 'N/A',
-          country: country || 'N/A'
+          class: profileValues.class || 'N/A',
+          country: profileValues.country || 'N/A'
         });
       } catch (emailErr) {
         // Don't fail the request if email fails
@@ -1318,6 +1483,17 @@ router.put('/:id/contenders/:contenderId', verifyAdmin, async (req, res) => {
       .single();
 
     if (updErr) throw updErr;
+
+    if (contender.profile_id && (picture !== undefined || video !== undefined)) {
+      const profileMedia = {};
+      if (picture !== undefined) profileMedia.picture = picture;
+      if (video !== undefined) profileMedia.video = video;
+      const { error: profileErr } = await db
+        .from('contender_profiles')
+        .update(profileMedia)
+        .eq('id', contender.profile_id);
+      if (profileErr) throw profileErr;
+    }
 
     // Notify bot if picture or video was updated (image now available)
     if ((picture !== undefined && picture) || (video !== undefined && video)) {
