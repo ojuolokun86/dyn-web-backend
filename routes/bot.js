@@ -92,6 +92,47 @@ router.get('/list-all', async (req, res) => {
   }
 });
 
+// Bot endpoint for the complete Hall of Fame ranking
+router.get('/hall-of-fame', async (req, res) => {
+  try {
+    const { data: entries, error } = await db
+      .from('hall_of_fame_web')
+      .select('player_name, player_image, team_name, league, season, profile_id')
+      .order('player_name', { ascending: true });
+
+    if (error) throw error;
+
+    const people = new Map();
+    (entries || []).forEach(entry => {
+      const key = entry.profile_id || entry.player_name.trim().toLowerCase();
+      if (!people.has(key)) {
+        people.set(key, {
+          name: entry.player_name,
+          picture: entry.player_image || '',
+          trophies: 0,
+          awards: []
+        });
+      }
+
+      const person = people.get(key);
+      if (!person.picture && entry.player_image) person.picture = entry.player_image;
+      person.trophies += 1;
+      person.awards.push({
+        award: entry.league || 'Hall of Fame',
+        season: entry.season || ''
+      });
+    });
+
+    const ranking = Array.from(people.values())
+      .sort((a, b) => b.trophies - a.trophies || a.name.localeCompare(b.name))
+      .map((person, index) => ({ rank: index + 1, ...person }));
+
+    res.json({ success: true, count: ranking.length, data: ranking });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Bot endpoint to mark contender as sent
 router.post('/mark-sent', async (req, res) => {
   try {

@@ -174,6 +174,11 @@ Response:
 }
 ```
 
+#### GET `/api/bot/hall-of-fame`
+Get the complete Hall of Fame ranking for WhatsApp. Each person includes their
+total trophy count and separate award/season records. The WhatsApp bot should
+call this endpoint when it sends the Hall of Fame message.
+
 ### Protected Endpoints (Admin Auth Required)
 
 #### GET `/api/contenders`
