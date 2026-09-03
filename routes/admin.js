@@ -4,6 +4,7 @@ const supabase = require('../config/db');
 const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail, sendHallOfFameNotification, testEmailConfiguration, sendContenderNotification } = require('../services/email-service');
 const { isValidEmail, isValidPassword, isValidUsername, hashPassword, comparePassword } = require('../utils/validation');
 const { uploadImage } = require('../config/multer-images');
+const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -818,8 +819,8 @@ router.post('/past-winners', async (req, res) => {
 
 // ===== TEAM SEARCH (TheSportsDB Integration) =====
 /**
- * Search for a football team and fetch its logo from TheSportsDB API
- * The logo is then cached in Supabase Storage
+ * Search for a football team and fetch its logo from TheSportsDB API.
+ * This endpoint is intentionally unauthenticated because team lookup is public metadata.
  */
 router.get('/search-team', async (req, res) => {
     try {
@@ -834,12 +835,8 @@ router.get('/search-team', async (req, res) => {
 
         console.log(`[/search-team] Searching for team: ${teamName}`);
 
-        // Fetch from TheSportsDB API
         const apiUrl = `https://www.thesportsdb.com/api/v1/json/123/searchteams.php?t=${encodeURIComponent(teamName)}`;
-        
-        const response = await fetch(apiUrl, {
-            timeout: 5000 // 5 second timeout
-        });
+        const response = await fetch(apiUrl, { timeout: 5000 });
 
         if (!response.ok) {
             return res.status(response.status).json({
@@ -858,12 +855,10 @@ router.get('/search-team', async (req, res) => {
             });
         }
 
-        // Use the first result
         const team = teams[0];
-
         const teamInfo = {
             name: team.strTeam || teamName,
-            logo: team.strBadge || team.strLogo || team.strTeamBadge || team.strTeamBadge || null,
+            logo: team.strBadge || team.strLogo || team.strTeamBadge || null,
             country: team.strCountry || null,
             founded: team.intFormedYear || null
         };
@@ -881,6 +876,107 @@ router.get('/search-team', async (req, res) => {
             success: false,
             error: error.message || 'Error searching for team'
         });
+    }
+});
+
+router.post('/cache-team-logo', requireAdmin, async (req, res) => {
+    try {
+        const { teamName } = req.body || {};
+
+        if (!teamName || String(teamName).trim().length === 0) {
+            return res.status(400).json({ success: false, error: 'Team name is required' });
+        }
+
+        const apiUrl = `https://www.thesportsdb.com/api/v1/json/123/searchteams.php?t=${encodeURIComponent(teamName)}`;
+        const response = await fetch(apiUrl, { timeout: 5000 });
+
+        if (!response.ok) {
+            return res.status(response.status).json({ success: false, error: 'Team lookup failed' });
+        }
+
+        const data = await response.json();
+        const teams = Array.isArray(data?.teams) ? data.teams : Array.isArray(data?.results) ? data.results : [];
+        if (!teams.length) {
+            return res.status(404).json({ success: false, error: 'Team not found' });
+        }
+
+        const team = teams[0];
+        const externalLogoUrl = team.strBadge || team.strLogo || team.strTeamBadge || null;
+        if (!externalLogoUrl) {
+            return res.status(400).json({ success: false, error: 'No logo available for this team in TheSportsDB' });
+        }
+
+        const imageResponse = await fetch(externalLogoUrl);
+        if (!imageResponse.ok) {
+            return res.status(502).json({ success: false, error: 'Unable to fetch the team logo from TheSportsDB' });
+        }
+
+        const blob = await imageResponse.blob();
+        const fileName = `${String(teamName).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'team-logo'}.png`;
+
+        const { data: uploadData, error: uploadError } = await supabase
+            .storage
+            .from('profiles')
+            .upload(fileName, blob, {
+                contentType: blob.type || 'image/png',
+                upsert: true
+            });
+
+        if (uploadError) {
+            return res.status(500).json({ success: false, error: 'Failed to cache team logo', details: uploadError.message });
+        }
+
+        const { data: { publicUrl } } = supabase
+            .storage
+            .from('profiles')
+            .getPublicUrl(uploadData?.path || fileName);
+
+        return res.json({ success: true, url: publicUrl, name: team.strTeam || teamName, source: 'thesportsdb' });
+    } catch (error) {
+        console.error('[/cache-team-logo] Error:', error);
+        return res.status(500).json({ success: false, error: error.message || 'Error caching team logo' });
+    }
+});
+
+router.get('/cached-team-logo', requireAdmin, async (req, res) => {
+    try {
+        const teamName = String(req.query.teamName || '').trim();
+        const safeTeamName = teamName
+            .toLowerCase()
+            .replace(/&/g, 'and')
+            .replace(/[^a-z0-9\s-]/g, '')
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '')
+            .substring(0, 50);
+
+        if (!safeTeamName) {
+            return res.status(404).json({ success: false, found: false });
+        }
+
+        const { data: files, error } = await supabase
+            .storage
+            .from('profiles')
+            .list('', { search: `${safeTeamName}.` });
+
+        if (error) {
+            return res.status(500).json({ success: false, error: 'Failed to check cached team logo' });
+        }
+
+        const cachedFile = (files || []).find(file => file.name.startsWith(`${safeTeamName}.`));
+        if (!cachedFile) {
+            return res.status(404).json({ success: false, found: false });
+        }
+
+        const { data: { publicUrl } } = supabase
+            .storage
+            .from('profiles')
+            .getPublicUrl(cachedFile.name);
+
+        return res.json({ success: true, found: true, url: publicUrl });
+    } catch (error) {
+        console.error('[/cached-team-logo] Error:', error);
+        return res.status(500).json({ success: false, error: 'Error checking cached team logo' });
     }
 });
 
@@ -996,7 +1092,7 @@ router.delete('/hall-of-fame/:id', async (req, res) => {
 });
 
 // Upload Past Winner image to Supabase Storage
-router.post('/past-winners/upload', verifyAdmin, uploadImage.single('image'), async (req, res) => {
+router.post('/past-winners/upload', requireAdmin, uploadImage.single('image'), async (req, res) => {
     try {
         
         
@@ -1335,7 +1431,7 @@ router.delete('/hall-of-fame-web/:id', async (req, res) => {
 });
 
 // Upload Hall of Fame images to Supabase Storage
-router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image'), async (req, res) => {
+router.post('/hall-of-fame-web/upload', requireAdmin, uploadImage.single('image'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ success: false, error: 'No image file provided' });
@@ -1345,10 +1441,9 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
         const fileExt = file.originalname.split('.').pop();
         const fileName = `hof_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
 
-        // Upload to Supabase Storage
         const { data, error } = await supabase
             .storage
-            .from('profiles')  // Use existing profile bucket
+            .from('profiles')
             .upload(fileName, file.buffer, {
                 contentType: file.mimetype,
                 upsert: false
@@ -1358,13 +1453,45 @@ router.post('/hall-of-fame-web/upload', verifyAdmin, uploadImage.single('image')
             return res.status(500).json({ success: false, error: 'Failed to upload image' });
         }
 
-        // Get public URL
         const { data: { publicUrl } } = supabase
             .storage
-            .from('profiles')  // Use existing profile bucket
+            .from('profiles')
             .getPublicUrl(fileName);
 
         res.json({ success: true, url: publicUrl });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/contenders/upload-image', requireAdmin, uploadImage.single('image'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, error: 'No image file provided' });
+        }
+
+        const file = req.file;
+        const fileExt = file.originalname.split('.').pop() || 'png';
+        const fileName = `contender_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+        const { data, error } = await supabase
+            .storage
+            .from('profiles')
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+                upsert: false
+            });
+
+        if (error) {
+            return res.status(500).json({ success: false, error: 'Failed to upload image' });
+        }
+
+        const { data: { publicUrl } } = supabase
+            .storage
+            .from('profiles')
+            .getPublicUrl(data?.path || fileName);
+
+        res.json({ success: true, url: publicUrl, path: data?.path || fileName });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

@@ -403,6 +403,19 @@ Files automatically reload on changes. Check logs for errors.
 **Version:** 1.0.0
 **Status:** Ready for Production Testing
 **Last Updated:** April 2, 2026
+
+## Tournament System (Phase 2)
+
+The tournament system is additive and does not alter the existing event/voting tables. Apply [tournament-schema.sql](tournament-schema.sql) in Supabase before using these endpoints.
+
+- `GET /api/tournaments` and `GET /api/tournaments/:id` expose public tournament details, registrations, rounds, and matches.
+- `POST /api/tournaments/:id/registrations` accepts participant registration during registration, rejects duplicates, and enforces the participant limit.
+- Admin JWT endpoints create, edit, cancel, and open tournaments; approve registrations; generate draws; record disputes; and submit match results.
+- Tournament statuses are `draft`, `registration`, `draw`, `in_progress`, `completed`, and `cancelled`.
+- Matches support scheduled, in-progress, completed, and disputed states, score validation, deadlines, and winner progression.
+- All admin mutations use the existing `requireAdmin` Bearer JWT boundary.
+
+The implementation currently supports `single_elimination`. Tournament registration is free. Prize information is informational metadata only; payment processing is not implemented.
 #   d y n - w e b 
  
  #   d y n - w e b - b a c k e n d 

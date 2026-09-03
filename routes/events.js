@@ -1541,14 +1541,12 @@ router.put('/:id/contenders/:contenderId', verifyAdmin, async (req, res) => {
   }
 });
 
-// Upload video for a contender (fallback if Supabase fails)
-router.post('/:id/contenders/:contenderId/upload-video', verifyAdmin, async (req, res) => {
+// Upload video for a contender
+router.post('/:id/contenders/:contenderId/upload-video', verifyAdmin, upload.single('video'), async (req, res) => {
   try {
     const eventId = req.params.id;
     const contenderId = req.params.contenderId;
-    const { videoUrl } = req.body;
 
-    // Verify contender exists and belongs to event
     const { data: contender, error: getErr } = await db
       .from('contenders')
       .select('*')
@@ -1557,17 +1555,41 @@ router.post('/:id/contenders/:contenderId/upload-video', verifyAdmin, async (req
       .single();
 
     if (getErr || !contender) {
-      return res.status(404).json({ success: false, error: 'Contender not found for this event' });
+      return res.status(404).json({
+        success: false,
+        error: 'Contender not found for this event'
+      });
     }
 
-    if (!videoUrl) {
-      return res.status(400).json({ success: false, error: 'videoUrl is required' });
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No video file provided'
+      });
     }
 
-    // Update contender with video URL
+    const videoFile = req.file;
+    const fileExt = videoFile.originalname.split('.').pop() || 'mp4';
+    const fileName = `contender-video_${contenderId}_${Date.now()}.${fileExt}`;
+
+    const { data: uploadData, error: uploadError } = await db.storage
+      .from('videos')
+      .upload(fileName, videoFile.buffer, {
+        contentType: videoFile.mimetype,
+        upsert: false
+      });
+
+    if (uploadError) {
+      return res.status(500).json({ success: false, error: 'Failed to upload video file' });
+    }
+
+    const { data: { publicUrl } } = db.storage
+      .from('videos')
+      .getPublicUrl(uploadData?.path || fileName);
+
     const { data: updated, error: updErr } = await db
       .from('contenders')
-      .update({ video: videoUrl })
+      .update({ video: publicUrl })
       .eq('id', contenderId)
       .select()
       .single();
