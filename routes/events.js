@@ -3,6 +3,10 @@ const router = express.Router();
 const db = require('../config/db');
 const jwt = require('jsonwebtoken');
 const { upload } = require('../config/multer'); // Import upload middleware from separate config
+const {
+  assignPendingEntriesToEvent,
+  syncEntriesForContender
+} = require('../services/trophy-tracking');
 
 // Admin verification middleware
 const verifyAdmin = (req, res, next) => {
@@ -516,10 +520,14 @@ router.post('/', verifyAdmin, async (req, res) => {
 
     if (error) throw error;
 
+    const trophyAssignment = await assignPendingEntriesToEvent(data);
+
     res.status(201).json({
       success: true,
-      message: 'Event created successfully',
-      data
+      message: trophyAssignment.issues.length
+        ? `Event created; ${trophyAssignment.issues.length} trophy record(s) need attention.`
+        : 'Event created successfully',
+      data: { ...data, trophy_assignment: trophyAssignment }
     });
   } catch (err) {
     res.status(500).json({
@@ -686,6 +694,16 @@ router.put('/:id/close-to-draft', verifyAdmin, async (req, res) => {
 router.put('/:id/winner', verifyAdmin, async (req, res) => {
   try {
     const { winnerId } = req.body;
+    const { data: event, error: eventError } = await db
+      .from('events')
+      .select('id, ended_at')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (eventError) throw eventError;
+    if (!event) {
+      return res.status(404).json({ success: false, error: 'Event not found' });
+    }
 
     if (!winnerId) {
       return res.status(400).json({
@@ -712,7 +730,8 @@ router.put('/:id/winner', verifyAdmin, async (req, res) => {
       .from('events')
       .update({
         status: 'winner_announced',
-        winner_id: winnerId
+        winner_id: winnerId,
+        ended_at: event.ended_at || new Date().toISOString()
       })
       .eq('id', req.params.id)
       .select()
@@ -981,7 +1000,15 @@ router.post('/:id/contenders', verifyAdmin, async (req, res) => {
         if (error) throw error;
         profile = data;
         if (sourceType !== 'user') {
-          await db.from(sourceTable).update({ profile_id: profile.id }).eq('id', sourceId);
+          const { error: linkError } = await db.from(sourceTable).update({ profile_id: profile.id }).eq('id', sourceId);
+          if (linkError) throw linkError;
+          if (sourceType === 'hall_of_fame') {
+            const { error: historyLinkError } = await db
+              .from('hall_of_fame_web')
+              .update({ profile_id: profile.id })
+              .eq('player_name', source.player_name);
+            if (historyLinkError) throw historyLinkError;
+          }
         }
       }
     }
@@ -1026,6 +1053,8 @@ router.post('/:id/contenders', verifyAdmin, async (req, res) => {
 
     if (error) throw error;
 
+    const trophySync = await syncEntriesForContender(data);
+
     // Send email notification if email provided
     if (profileValues.email && profileValues.email.trim()) {
       try {
@@ -1044,7 +1073,7 @@ router.post('/:id/contenders', verifyAdmin, async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Contender created successfully',
-      data
+      data: { ...data, trophy_sync: trophySync }
     });
   } catch (err) {
     res.status(500).json({
@@ -1304,6 +1333,9 @@ router.put('/:id/contenders/:contenderId/point-records/:recordId', verifyAdmin, 
     if (getErr || !oldRecord) {
       return res.status(404).json({ success: false, error: 'Point record not found' });
     }
+    if (oldRecord.hall_of_fame_entry_id) {
+      return res.status(400).json({ success: false, error: 'This point award comes from a Hall of Fame trophy. Edit the trophy achievement or category instead.' });
+    }
 
     // Update the record
     const { data: updated, error: updErr } = await db
@@ -1355,6 +1387,9 @@ router.delete('/:id/contenders/:contenderId/point-records/:recordId', verifyAdmi
 
     if (getErr || !record) {
       return res.status(404).json({ success: false, error: 'Point record not found' });
+    }
+    if (record.hall_of_fame_entry_id) {
+      return res.status(400).json({ success: false, error: 'This point award comes from a Hall of Fame trophy. Delete the trophy achievement instead.' });
     }
 
     // Delete the record
@@ -1935,4 +1970,3 @@ router.get('/:id/contenders/:contenderId/votes', async (req, res) => {
 });
 
 module.exports = router;
-

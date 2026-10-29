@@ -254,6 +254,22 @@ CREATE INDEX IF NOT EXISTS idx_contenders_profile ON contenders(profile_id);
 The profile is the reusable identity. Each event still gets its own contender row,
 so points and event-specific history remain independent.
 
+#### Enable event-aware trophy categories and scoring
+After creating the events, contenders, point tables, contender point records,
+Hall of Fame, and reusable profile tables above, run
+[`trophy-tracking-schema.sql`](./trophy-tracking-schema.sql) in the Supabase SQL
+Editor. This adds trophy categories, event/date links for Hall of Fame
+achievements, and links between achievements and their automatically awarded
+event points. Existing Hall of Fame league names are imported as categories
+with 0 points; set each category's points in the admin dashboard.
+
+The first admin visit to Hall of Fame management reconciles existing
+achievements against recorded event end dates and contender records. The
+dashboard reports entries that could not be matched automatically so admins
+can correct them. For legacy closed/winner-announced events missing an end
+date, the migration uses the event's `updated_at` timestamp as the best
+available end-date boundary.
+
 #### Migrations (alter existing tables to support fractional points)
 Run these in Supabase SQL editor if your tables already exist and you want to allow decimal points:
 ```sql

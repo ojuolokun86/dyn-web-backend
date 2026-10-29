@@ -19,6 +19,20 @@ The public sees:
 
 ## 🎯 Event Lifecycle
 
+### Trophy tracking across events
+
+- Hall of Fame categories (for example, Champions League) group separate
+  player achievements.
+- Each category has a points value configured in Admin → Hall of Fame.
+- Achievement dates determine which Balloon d'Or event period receives the
+  points. If the next event does not exist yet, the achievement stays pending
+  and is assigned when that event is created.
+- Existing Hall of Fame history is reconciled against event dates when an
+  admin opens Hall of Fame management. Player totals are matched by reusable
+  profile when available, otherwise by an exact player name.
+- To enable this feature on an existing Supabase database, run
+  `trophy-tracking-schema.sql` after the base schema in `ADMIN_SETUP.md`.
+
 ### State Transitions
 
 ```

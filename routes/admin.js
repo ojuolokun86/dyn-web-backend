@@ -5,6 +5,13 @@ const { sendRegistrationToSuperAdmin, sendApprovalEmail, sendRejectionEmail, sen
 const { isValidEmail, isValidPassword, isValidUsername, hashPassword, comparePassword } = require('../utils/validation');
 const { uploadImage } = require('../config/multer-images');
 const { requireAdmin } = require('../middleware/auth');
+const {
+    assignPendingEntriesToEvent,
+    syncEntriesForContender,
+    syncHallOfFameEntry,
+    removeHallOfFameEntryPoints,
+    reconcileTrophyHistory
+} = require('../services/trophy-tracking');
 
 const router = express.Router();
 
@@ -1139,12 +1146,137 @@ router.post('/past-winners/upload', requireAdmin, uploadImage.single('image'), a
 });
 
 // ===== HALL OF FAME WEB (New Structure) =====
+router.post('/trophy-history/reconcile', verifyAdmin, async (req, res) => {
+    try {
+        const data = await reconcileTrophyHistory();
+        res.json({ success: true, data });
+    } catch (err) {
+        console.error('[admin /trophy-history/reconcile] failed:', err);
+        res.status(500).json({ success: false, error: err.message || 'Failed to reconcile trophy history' });
+    }
+});
+
+router.get('/trophy-categories', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('trophy_categories')
+            .select('*')
+            .order('name', { ascending: true });
+        if (error) throw error;
+        res.json({ success: true, data: data || [] });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/trophy-categories', verifyAdmin, async (req, res) => {
+    try {
+        const name = String(req.body.name || '').trim();
+        const points = Number(req.body.points);
+        if (!name || !Number.isFinite(points) || points < 0) {
+            return res.status(400).json({ success: false, error: 'A category name and non-negative point value are required' });
+        }
+
+        const { data, error } = await supabase
+            .from('trophy_categories')
+            .insert({ name, points })
+            .select()
+            .single();
+        if (error) throw error;
+        res.status(201).json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.put('/trophy-categories/:id', verifyAdmin, async (req, res) => {
+    try {
+        const name = String(req.body.name || '').trim();
+        const points = Number(req.body.points);
+        if (!name || !Number.isFinite(points) || points < 0) {
+            return res.status(400).json({ success: false, error: 'A category name and non-negative point value are required' });
+        }
+
+        const { data: previous, error: getError } = await supabase
+            .from('trophy_categories')
+            .select('*')
+            .eq('id', req.params.id)
+            .single();
+        if (getError) throw getError;
+
+        const { data, error } = await supabase
+            .from('trophy_categories')
+            .update({ name, points, updated_at: new Date().toISOString() })
+            .eq('id', req.params.id)
+            .select()
+            .single();
+        if (error) throw error;
+
+        if (previous.name !== name) {
+            const { error: renameError } = await supabase
+                .from('hall_of_fame_web')
+                .update({ league: name })
+                .eq('league', previous.name);
+            if (renameError) throw renameError;
+        }
+
+        const { error: tablesError } = await supabase
+            .from('point_tables')
+            .update({ title: `${name} Trophy Awards`, default_points: points })
+            .eq('trophy_category_id', data.id);
+        if (tablesError) throw tablesError;
+
+        const { data: entries, error: entriesError } = await supabase
+            .from('hall_of_fame_web')
+            .select('id')
+            .eq('league', name);
+        if (entriesError) throw entriesError;
+        for (const entry of entries || []) {
+            await syncHallOfFameEntry(entry.id);
+        }
+
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.delete('/trophy-categories/:id', verifyAdmin, async (req, res) => {
+    try {
+        const { data: category, error: getError } = await supabase
+            .from('trophy_categories')
+            .select('id, name')
+            .eq('id', req.params.id)
+            .single();
+        if (getError) throw getError;
+
+        const { data: entries, error: entriesError } = await supabase
+            .from('hall_of_fame_web')
+            .select('id')
+            .eq('league', category.name)
+            .limit(1);
+        if (entriesError) throw entriesError;
+        if (entries?.length) {
+            return res.status(400).json({ success: false, error: 'This category has Hall of Fame achievements. Remove or reassign those entries before deleting it.' });
+        }
+
+        const { error } = await supabase
+            .from('trophy_categories')
+            .delete()
+            .eq('id', category.id);
+        if (error) throw error;
+        res.json({ success: true, message: 'Trophy category deleted' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // Get all Hall of Fame Web entries grouped by league
 router.get('/hall-of-fame-web', async (req, res) => {
     try {
         const { data, error } = await supabase
             .from('hall_of_fame_web')
-            .select('*')
+            .select('*, events:event_id(name)')
             .order('league', { ascending: true })
             .order('season', { ascending: true });
 
@@ -1173,7 +1305,10 @@ router.get('/hall-of-fame-web', async (req, res) => {
                 team_name: entry.team_name,
                 team_logo: entry.team_logo,
                 season: entry.season,
-                id: entry.id
+                id: entry.id,
+                event_id: entry.event_id,
+                event_name: entry.events?.name || '',
+                awarded_at: entry.awarded_at
             });
         });
 
@@ -1200,69 +1335,141 @@ router.get('/hall-of-fame-web/list', async (req, res) => {
     }
 });
 
+router.get('/hall-of-fame-web/stats', async (req, res) => {
+    try {
+        const { playerName, profileId, eventId } = req.query;
+        if (!playerName && !profileId) {
+            return res.status(400).json({ success: false, error: 'playerName or profileId is required' });
+        }
+
+        const entryQueries = [];
+        if (profileId) {
+            entryQueries.push(supabase.from('hall_of_fame_web')
+                .select('id, event_id, league, profile_id, player_name')
+                .eq('profile_id', profileId));
+        }
+        if (playerName) {
+            const exactPlayerNamePattern = String(playerName).trim().replace(/[\\%_]/g, '\\$&');
+            let nameQuery = supabase.from('hall_of_fame_web')
+                .select('id, event_id, league, profile_id, player_name')
+                .ilike('player_name', exactPlayerNamePattern);
+            if (profileId) nameQuery = nameQuery.is('profile_id', null);
+            entryQueries.push(nameQuery);
+        }
+        const results = await Promise.all(entryQueries);
+        const errorResult = results.find(result => result.error);
+        if (errorResult) throw errorResult.error;
+        const uniqueEntries = new Map();
+        for (const result of results) {
+            for (const entry of result.data || []) uniqueEntries.set(entry.id, entry);
+        }
+        const entries = Array.from(uniqueEntries.values());
+        const eventEntries = eventId ? entries.filter(entry => entry.event_id === eventId) : [];
+        res.json({
+            success: true,
+            data: {
+                allTimeTrophies: entries.length,
+                eventTrophies: eventEntries.length,
+                categories: entries.reduce((totals, entry) => {
+                    totals[entry.league] = (totals[entry.league] || 0) + 1;
+                    return totals;
+                }, {}),
+                eventCategories: eventEntries.reduce((totals, entry) => {
+                    totals[entry.league] = (totals[entry.league] || 0) + 1;
+                    return totals;
+                }, {})
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // Create Hall of Fame Web entry
 router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
     try {
-        const { player_name, league, team_name, season, team_logo, player_image, email, phone } = req.body;
+        const { player_name, league, team_name, season, team_logo, player_image, email, phone, profile_id, awarded_at } = req.body;
+        const playerName = String(player_name || '').trim();
+        const categoryName = String(league || '').trim();
+        const teamName = String(team_name || '').trim();
 
-        if (!player_name || !league || !team_name || !season) {
+        if (!playerName || !categoryName || !teamName || !season) {
             return res.status(400).json({ success: false, error: 'Required fields missing' });
         }
 
-        // Check if league and season combination already exists
+        const { data: category, error: categoryError } = await supabase
+            .from('trophy_categories')
+            .select('id')
+            .eq('name', categoryName)
+            .single();
+        if (categoryError || !category) {
+            return res.status(400).json({ success: false, error: 'Select an existing trophy category first' });
+        }
+
+        // Different players may have achievements in the same category and season.
         const { data: existingEntry, error: checkError } = await supabase
             .from('hall_of_fame_web')
             .select('id, player_name, team_name')
-            .eq('league', league)
+            .eq('league', categoryName)
             .eq('season', season)
-            .single();
+            .eq('player_name', playerName)
+            .eq('team_name', teamName)
+            .limit(1);
 
-        if (!checkError && existingEntry) {
+        if (checkError) throw checkError;
+        if (existingEntry?.length) {
             return res.status(400).json({ 
                 success: false, 
-                error: `Hall of Fame entry already exists for ${league} Season ${season}. Entry: ${existingEntry.player_name} (${existingEntry.team_name}). Each league can only have one entry per season.` 
+                error: `This achievement is already recorded for ${existingEntry[0].player_name} (${existingEntry[0].team_name}), ${categoryName} Season ${season}.`
             });
         }
 
-        const previousAchievements = await getHallOfFameAchievementCount(player_name);
+        const previousAchievements = await getHallOfFameAchievementCount(playerName);
         const achievementCount = previousAchievements + 1;
+        const awardDate = awarded_at ? new Date(awarded_at) : new Date();
+        if (Number.isNaN(awardDate.getTime())) {
+            return res.status(400).json({ success: false, error: 'Trophy date is invalid' });
+        }
 
         const { data, error } = await supabase
             .from('hall_of_fame_web')
             .insert([{
-                player_name,
-                league,
-                team_name,
+                player_name: playerName,
+                league: categoryName,
+                team_name: teamName,
                 season,
                 team_logo,
                 player_image,
                 email: email || '',
                 phone: phone || '',
                 achievement_count: achievementCount,
+                profile_id: profile_id || null,
+                awarded_at: awardDate.toISOString(),
                 created_at: new Date().toISOString()
             }])
             .select()
             .single();
 
-        if (!error && data) {
-            const freshTotal = (await getHallOfFameAchievementCount(player_name)) + 1;
-            await supabase
-                .from('hall_of_fame_web')
-                .update({ achievement_count: freshTotal })
-                .eq('id', data.id);
-        }
-
         if (error) throw error;
+
+        let scoring = null;
+        let scoringWarning = null;
+        try {
+            scoring = await syncHallOfFameEntry(data.id);
+        } catch (scoringError) {
+            scoringWarning = scoringError.message;
+            console.error(`[admin /hall-of-fame-web] saved entry ${data.id} but failed to apply event points:`, scoringError);
+        }
 
         // Send email notification if email provided
         if (email && email.trim()) {
             try {
                 
                 await sendHallOfFameNotification({
-                    player_name,
+                    player_name: playerName,
                     email,
-                    league,
-                    team_name,
+                    league: categoryName,
+                    team_name: teamName,
                     season,
                     achievement_count: achievementCount,
                     phone: phone || '',
@@ -1280,7 +1487,13 @@ router.post('/hall-of-fame-web', verifyAdmin, async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'Hall of Fame entry created successfully',
-            data
+            data: {
+                ...data,
+                event_id: scoring?.eventId || data.event_id,
+                points_awarded: scoring?.points || 0,
+                points_applied: scoring?.pointsAwarded || false,
+                scoring_warning: scoringWarning
+            }
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -1314,13 +1527,31 @@ router.get('/hall-of-fame-web/:id', async (req, res) => {
     }
 });
 
-router.put('/hall-of-fame-web/:id', uploadImage.fields([
+router.put('/hall-of-fame-web/:id', verifyAdmin, uploadImage.fields([
     { name: 'playerImageFile', maxCount: 1 },
     { name: 'teamLogoFile', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        const { playerName, league, team, season, email, phone } = req.body;
+        const { playerName, league, team, season, email, phone, awardedAt } = req.body;
         const { id } = req.params;
+
+        const { data: currentEntry, error: currentError } = await supabase
+            .from('hall_of_fame_web')
+            .select('id')
+            .eq('id', id)
+            .single();
+        if (currentError) throw currentError;
+
+        if (league !== undefined) {
+            const { data: category, error: categoryError } = await supabase
+                .from('trophy_categories')
+                .select('id')
+                .eq('name', String(league).trim())
+                .single();
+            if (categoryError || !category) {
+                return res.status(400).json({ success: false, error: 'Select an existing trophy category first' });
+            }
+        }
         
         // Handle file uploads
         let team_logo = req.body.team_logo; // Existing URL if no new file uploaded
@@ -1391,6 +1622,14 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
         if (season !== undefined) updateData.season = parseInt(season);
         if (email !== undefined) updateData.email = email || '';
         if (phone !== undefined) updateData.phone = phone || '';
+        if (awardedAt !== undefined) {
+            const parsedDate = new Date(awardedAt);
+            if (Number.isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ success: false, error: 'Trophy date is invalid' });
+            }
+            updateData.awarded_at = parsedDate.toISOString();
+            updateData.event_id = null;
+        }
 
         const { data, error } = await supabase
             .from('hall_of_fame_web')
@@ -1403,10 +1642,19 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
             return res.status(500).json({ success: false, error: error.message });
         }
 
+        let scoringWarning = null;
+        try {
+            await syncHallOfFameEntry(currentEntry.id);
+        } catch (scoringError) {
+            scoringWarning = scoringError.message;
+            console.error(`[admin /hall-of-fame-web/${id}] updated entry but failed to refresh event points:`, scoringError);
+        }
+
         res.json({
             success: true,
             message: 'Hall of Fame entry updated',
-            data: data
+            data,
+            warning: scoringWarning
         });
         
     } catch (err) {
@@ -1415,8 +1663,9 @@ router.put('/hall-of-fame-web/:id', uploadImage.fields([
 });
 
 // Delete Hall of Fame Web entry
-router.delete('/hall-of-fame-web/:id', async (req, res) => {
+router.delete('/hall-of-fame-web/:id', verifyAdmin, async (req, res) => {
     try {
+        await removeHallOfFameEntryPoints(req.params.id);
         const { error } = await supabase
             .from('hall_of_fame_web')
             .delete()
