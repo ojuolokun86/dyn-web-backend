@@ -1292,6 +1292,103 @@ router.get('/:id/contenders/:contenderId/point-records', async (req, res) => {
   }
 });
 
+// Public event-scoped points breakdown for contender profiles and analytics.
+router.get('/:id/contender-points-breakdown', async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const { data: event, error: eventError } = await db
+      .from('events')
+      .select('id')
+      .eq('id', eventId)
+      .maybeSingle();
+    if (eventError) throw eventError;
+    if (!event) return res.status(404).json({ success: false, error: 'Event not found' });
+
+    const [
+      { data: contenders, error: contendersError },
+      { data: pointRecords, error: pointRecordsError },
+      { data: pointTables, error: pointTablesError },
+      { data: voteRecords, error: voteRecordsError },
+      { data: voteTables, error: voteTablesError }
+    ] = await Promise.all([
+      db.from('contenders')
+        .select('id, name, class, country, event_id')
+        .eq('event_id', eventId),
+      db.from('contender_point_records')
+        .select('contender_id, point_table_id, points_awarded')
+        .eq('event_id', eventId),
+      db.from('point_tables')
+        .select('id, title')
+        .eq('event_id', eventId),
+      db.from('contender_vote_records')
+        .select('contender_id, vote_table_id, points_awarded')
+        .eq('event_id', eventId),
+      db.from('vote_tables')
+        .select('id, table_number')
+        .eq('event_id', eventId)
+    ]);
+
+    if (contendersError) throw contendersError;
+    if (pointRecordsError) throw pointRecordsError;
+    if (pointTablesError) throw pointTablesError;
+    if (voteRecordsError) throw voteRecordsError;
+    if (voteTablesError) throw voteTablesError;
+
+    const pointTableNames = new Map((pointTables || []).map(table => [table.id, table.title]));
+    const voteTableNumbers = new Map((voteTables || []).map(table => [table.id, table.table_number]));
+    const pointsByContender = new Map();
+
+    const addPoints = (contenderId, key, title, type, points) => {
+      if (!pointsByContender.has(contenderId)) pointsByContender.set(contenderId, new Map());
+      const breakdown = pointsByContender.get(contenderId);
+      if (!breakdown.has(key)) breakdown.set(key, { title, type, points: 0, count: 0 });
+      const item = breakdown.get(key);
+      item.points += Number(points) || 0;
+      item.count += 1;
+    };
+
+    for (const record of pointRecords || []) {
+      const title = pointTableNames.get(record.point_table_id) || 'Other points';
+      addPoints(
+        record.contender_id,
+        `award:${record.point_table_id || title}`,
+        title,
+        'award',
+        record.points_awarded
+      );
+    }
+
+    for (const vote of voteRecords || []) {
+      const tableNumber = voteTableNumbers.get(vote.vote_table_id);
+      const title = tableNumber ? `Votes — Table ${tableNumber}` : 'Votes';
+      addPoints(
+        vote.contender_id,
+        `vote:${vote.vote_table_id || title}`,
+        title,
+        'vote',
+        vote.points_awarded
+      );
+    }
+
+    const data = (contenders || []).map(contender => {
+      const breakdown = Array.from(pointsByContender.get(contender.id)?.values() || []);
+      const totalPoints = breakdown.reduce((total, item) => total + item.points, 0);
+      return {
+        ...contender,
+        total_points: totalPoints,
+        points_breakdown: breakdown
+      };
+    }).sort((a, b) =>
+      b.total_points - a.total_points ||
+      String(a.name || '').localeCompare(String(b.name || ''))
+    );
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Get all point awards for a specific point table in an event
 router.get('/:id/point-table/:pointTableId/awards', async (req, res) => {
   try {
