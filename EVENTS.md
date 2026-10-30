@@ -16,6 +16,13 @@ The public sees:
 - 🔒 "Event Closed" message after voting ends
 - 🎉 "Winner Announced" celebration page
 - 📋 "Coming Soon" for draft events
+- Current contenders by default, with a separate view of contenders from past events
+
+### Public contender history
+
+`GET /api/events/all-contenders` returns contenders from current events.
+Pass `?includePast=true` to include contenders from closed and completed events;
+each contender includes the event name, status, and end date when available.
 
 ## 🎯 Event Lifecycle
 
@@ -23,13 +30,14 @@ The public sees:
 
 - Hall of Fame categories (for example, Champions League) group separate
   player achievements.
-- Each category has a points value configured in Admin → Hall of Fame.
+- Each category has a points value configured in Admin → Events → Point Tables
+  & Award Points. Hall of Fame management is for recording achievements.
 - Achievement dates determine which Balloon d'Or event period receives the
   points. If the next event does not exist yet, the achievement stays pending
   and is assigned when that event is created.
-- Existing Hall of Fame history is reconciled against event dates when an
-  admin opens Hall of Fame management. Player totals are matched by reusable
-  profile when available, otherwise by an exact player name.
+- Admins can reconcile existing Hall of Fame history against event dates using
+  “Check existing trophy history” on the Events page. Player totals are matched
+  by reusable profile when available, otherwise by an exact player name.
 - To enable this feature on an existing Supabase database, run
   `trophy-tracking-schema.sql` after the base schema in `ADMIN_SETUP.md`.
 

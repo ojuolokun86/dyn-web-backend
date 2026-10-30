@@ -30,15 +30,19 @@ const verifyAdmin = (req, res, next) => {
   }
 };
 
-// Get all contenders from all active events (public endpoint)
+// Get contenders from active events, or include past events when requested.
 router.get('/all-contenders', async (req, res) => {
   try {
-    // Get all events that are not closed/winner_announced
-    const { data: events, error: eventsError } = await db
+    let eventsQuery = db
       .from('events')
       .select('*')
-      .or('status.neq.closed,status.neq.winner_announced')
       .order('created_at', { ascending: false });
+
+    if (req.query.includePast !== 'true') {
+      eventsQuery = eventsQuery.not('status', 'in', '(closed,winner_announced)');
+    }
+
+    const { data: events, error: eventsError } = await eventsQuery;
 
     if (eventsError) {
       throw eventsError;
@@ -53,7 +57,7 @@ router.get('/all-contenders', async (req, res) => {
       });
     }
 
-    // Get contenders for each active event
+    // Get contenders for each selected event
     const allContendersWithEvents = [];
     
     for (const event of events) {
@@ -63,9 +67,7 @@ router.get('/all-contenders', async (req, res) => {
         .eq('event_id', event.id)
         .order('total_points', { ascending: false });
 
-      if (contendersError) {
-        continue;
-      }
+      if (contendersError) throw contendersError;
 
       if (contenders && contenders.length > 0) {
         // Add event info to each contender
@@ -73,7 +75,8 @@ router.get('/all-contenders', async (req, res) => {
           ...contender,
           event_name: event.name,
           event_id: event.id,
-          event_status: event.status
+          event_status: event.status,
+          event_ended_at: event.ended_at
         }));
         
         allContendersWithEvents.push(...contendersWithEventInfo);
